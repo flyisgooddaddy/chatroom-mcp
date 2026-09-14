@@ -82,11 +82,7 @@ class OpenwriterAgent:
         }
         with self.inbox.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-        print(f"[openwriter] queued to inbox: {mid} from {sender}")
-        await self.post_to_chatroom(
-            sender, subj,
-            f"(openwriter 已收到，正在处理… 参考 {mid})",
-        )
+        print(f"[openwriter] queued to inbox: {mid} from {sender} (no auto-reply)")
 
     # --- push receiver ---
     def start_callback_server(self) -> None:
