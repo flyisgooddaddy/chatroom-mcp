@@ -121,6 +121,25 @@ export default (async ({ client, directory }) => {
   async function tick() {
     if (busy) return
     try {
+      // Store-reset tolerance: "clear" empties the store and message ids restart
+      // low (msg-0001...). Our watermark would otherwise sit at an old high id
+      // and `after=<old high>` would never match the new low ids -> @ goes deaf.
+      // Peek the current newest id and, if it went BACKWARD vs our watermark,
+      // re-prime so we keep hearing future @.
+      let newest = ""
+      try {
+        const pr = await fetch(
+          `${CHAT_URL}/api/messages?room=${encodeURIComponent(ROOM)}&limit=1`,
+        )
+        const pd: any = await pr.json()
+        const pl: any[] = Array.isArray(pd) ? pd : pd?.messages || []
+        newest = pl[0]?.id ?? ""
+      } catch {}
+      if (lastId && (!newest || newest < lastId)) {
+        log("store reset detected (newest=", newest, ", watermark=", lastId, ") re-prime")
+        lastId = "" // full re-sync next poll so even the first post-reset @ is caught
+      }
+
       const q = lastId ? `&after=${encodeURIComponent(lastId)}` : ""
       const r = await fetch(`${CHAT_URL}/api/messages?room=${encodeURIComponent(ROOM)}&limit=50${q}`)
       const data: any = await r.json()
