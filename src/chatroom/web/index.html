@@ -47,7 +47,7 @@
   .room-tag, .to-tag { background: var(--hover); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; font-size: 10px; margin-left: 4px; }
   /* Input */
   #input-row { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 8px 12px; background: var(--panel); display: flex; gap: 8px; }
-  #input { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 8px; border-radius: 4px; font: inherit; }
+  #input { display: block; width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 8px; border-radius: 4px; font: inherit; }
   #input:focus { outline: none; border-color: var(--accent); }
   #send-btn { background: var(--accent); color: #000; border: 0; padding: 0 16px; border-radius: 4px; font: inherit; font-weight: 600; cursor: pointer; }
   #send-btn:hover { opacity: 0.85; }
@@ -147,11 +147,17 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-// render subject+body with fenced code blocks highlighted + inline code
+// render subject+body with fenced code blocks highlighted + inline code.
+// Never print the same text twice: only show the subject line when it differs
+// from the body (the GUI + human posts often set subject == body).
 function renderBody(m) {
-  const raw = (m.body || m.subject || '').toString();
-  const subj = m.body ? m.subject : null;
-  const lines = (subj ? subj + '\n' + raw : raw).split('\n');
+  const subj = String(m.subject || '');
+  const hasBody = m.body != null && String(m.body).length > 0;
+  const raw = hasBody ? String(m.body) : subj;
+  const parts = [];
+  if (hasBody && subj && subj !== raw) parts.push(subj);  // subject only if distinct
+  parts.push(raw);
+  const lines = parts.join('\n').split('\n');
   let html = '';
   let inCode = false;
   for (const ln of lines) {
@@ -164,7 +170,7 @@ function renderBody(m) {
     html += escapeHtml(ln).replace(/`([^`]+)`/g, '<code>$1</code>') + '\n';
   }
   if (inCode) html += '</pre>';
-  return html.trimEnd() || '(empty)';
+  return html.trimEnd() || (subj ? escapeHtml(subj) : '(empty)');
 }
 
 function renderAgents() {
@@ -216,7 +222,11 @@ function renderMessages() {
     return;
   }
   el.innerHTML = '';
+  const rendered = new Set();
   for (const m of list) {
+    const mid = String(m.id || '');
+    if (mid && rendered.has(mid)) continue;  // hard dedup: never show the same msg twice
+    if (mid) rendered.add(mid);
     const sender = m.from || '?';
     const cls = SENDER_COLORS[sender] || '';
     const wrap = document.createElement('div');
@@ -364,9 +374,14 @@ function connectWS() {
 
 function handleEvent(evt) {
   if (evt.kind === 'snapshot') {
-    messages = []; seenIds = new Set();
     if (evt.rooms) rooms = evt.rooms;
-    for (const m of evt.messages || []) addMessage(m);
+    // MERGE, never wipe: keeps seenIds stable so re-sent snapshots can't
+    // re-flash already-shown messages (a common source of duplicates).
+    for (const m of evt.messages || []) {
+      const mroom = m.room || 'main';
+      if (currentRoom !== mroom) continue;
+      if (addMessage(m)) { messages.sort((a,b)=>String(a.id).localeCompare(String(b.id))); }
+    }
     sessions = new Map();
     for (const s of evt.sessions || []) sessions.set(s.name, s);
     renderMessages(); updateStatus();

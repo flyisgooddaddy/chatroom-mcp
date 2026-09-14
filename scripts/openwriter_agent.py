@@ -80,6 +80,19 @@ class OpenwriterAgent:
             "subject": subj,
             "body": body,
         }
+        # Dedup by incoming_id: skip if this id already in _inbox.jsonl
+        if self.inbox.exists():
+            try:
+                with self.inbox.open(encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            if json.loads(line.strip()).get("incoming_id") == mid:
+                                print(f"[openwriter] inbox dedup: {mid} already in queue, skipping")
+                                return
+                        except Exception:
+                            continue
+            except Exception:
+                pass
         with self.inbox.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         print(f"[openwriter] queued to inbox: {mid} from {sender} (no auto-reply)")
@@ -150,16 +163,15 @@ class OpenwriterAgent:
             await asyncio.sleep(3)
 
     async def preload_seen(self) -> None:
-        """Mark all existing messages as already-seen so we only react to NEW ones."""
-        try:
-            r = await self.mcp.call_tool("chatroom_history", {"limit": 1000})
-            raw = r[1] if isinstance(r, tuple) else r
-            msgs = raw.get("messages", []) if isinstance(raw, dict) else raw
-            for m in msgs:
-                self.seen.add(m.get("id", ""))
-            print(f"[openwriter] preloaded {len(self.seen)} existing messages as seen")
-        except Exception as e:
-            print(f"[openwriter] preload error: {e}")
+        """Mark all existing messages as already-seen so we only react to NEW ones.
+
+        DISABLED by default: history files can contain 100s of old ids, and the
+        reload happens across processes. Inbox writes are naturally idempotent
+        (we dedupe by incoming_id in tick). Keep the seen set empty on startup
+        and rely on _inbox.jsonl dedup at the operator side.
+        """
+        # No-op for now. To re-enable, read messages.jsonl here and add ids to self.seen.
+        print("[openwriter] preload disabled; relying on inbox dedup")
 
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
