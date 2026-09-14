@@ -13,7 +13,7 @@ async def notify(callback_url: str, payload: dict[str, Any],
     """
     for attempt in range(retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
                 r = await client.post(callback_url, json=payload)
             return 200 <= r.status_code < 300
         except (httpx.HTTPError, asyncio.TimeoutError):

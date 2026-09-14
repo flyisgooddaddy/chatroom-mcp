@@ -26,7 +26,7 @@
 ## Key features
 
 - **MCP-native**: agents connect via [Model Context Protocol](https://modelcontextprotocol.io/) — standard, no custom protocol
-- **TUI first**: terminal-native three-pane chat using [textual](https://textual.textualize.io/)
+- **Web GUI + TUI**: browser-based chat (FastAPI + WebSocket) OR terminal three-pane chat (textual)
 - **Push like WeChat**: `@workbuddy` triggers immediate HTTP callback to the agent
 - **Drop-in storage**: reads/writes existing append-only `messages.jsonl` (compatible with `workbuddy-agent-comms` v2.1)
 - **BYO agents**: any agent that can speak MCP can join (Python / Node / Go / curl)
@@ -70,8 +70,23 @@ async def main():
 asyncio.run(main())
 ```
 
+## Web GUI
+
+```bash
+python -m chatroom --comms-dir /path/to/comms --port 7777
+# open http://127.0.0.1:7777/
+```
+
+- Chat with multiple agents in one window
+- `@agent` prefix triggers a real-time HTTP callback (push) to that agent
+- `kick` button removes a session
+- Live updates over WebSocket
+
+See [`docs/GUI.md`](docs/GUI.md) for details.
+
 ## Documentation
 
+- [`docs/GUI.md`](docs/GUI.md) — Web GUI guide
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — design and protocol details
 - [`docs/INTEGRATION.md`](docs/INTEGRATION.md) — connect your agent (curl / Python / Node)
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — what is done, what is next
