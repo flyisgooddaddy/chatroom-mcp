@@ -75,9 +75,20 @@ def create_server(comms_dir: Path) -> MCPServer:
     def post(msg: dict[str, Any]) -> dict[str, Any]:
         # store.append fills in id/timestamp before validation; just call it.
         try:
-            return store.append(msg)
+            stored = store.append(msg)
         except ValueError as e:
             return {"error": {"code": -32602, "message": str(e)}}
+        # Push notification to any @-mentioned agent (best-effort, fire-and-forget)
+        target = stored.get("to")
+        if target and target in (s.name for s in sessions.all()):
+            sess = sessions.get(target)
+            if sess and sess.callback_url:
+                from chatroom.push import notify_fire_and_forget
+                notify_fire_and_forget(sess.callback_url, {
+                    "event": "chatroom_message",
+                    "message": stored,
+                })
+        return stored
 
     @mcp.tool(
         name=TOOL_HISTORY,
