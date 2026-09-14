@@ -3,22 +3,32 @@
 P1 uses O_APPEND for atomic small writes; P2 adds cross-platform file lock.
 """
 from __future__ import annotations
+
 import json
-import os
 import re
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from chatroom.protocol import is_well_formed
 
 _ID_RE = re.compile(r"^msg-(\d+)$")
 
 
+DEFAULT_ROOM = "main"
+
+
 class Store:
-    def __init__(self, comms_dir: Path) -> None:
+    """Append-only per-room store backed by messages.jsonl / messages-<room>.jsonl."""
+
+    def __init__(self, comms_dir: Path, room: str = DEFAULT_ROOM) -> None:
         self.comms_dir = Path(comms_dir)
-        self.messages_path = self.comms_dir / "messages.jsonl"
+        self.room = room or DEFAULT_ROOM
+        if self.room == DEFAULT_ROOM:
+            self.messages_path = self.comms_dir / "messages.jsonl"
+        else:
+            self.messages_path = self.comms_dir / f"messages-{self.room}.jsonl"
         self.comms_dir.mkdir(parents=True, exist_ok=True)
         if not self.messages_path.exists():
             self.messages_path.touch()
@@ -55,6 +65,38 @@ class Store:
     def read_all(self) -> list[dict[str, Any]]:
         return list(self.iter_all())
 
+    def last_id(self) -> str:
+        """Highest msg-NNNN id present, or '' if none."""
+        last = -1
+        for m in self.iter_all():
+            mm = _ID_RE.match(str(m.get("id", "")))
+            if mm:
+                last = max(last, int(mm.group(1)))
+        return "" if last < 0 else f"msg-{last:04d}"
+
+    def messages_after(self, since: str | None) -> list[dict[str, Any]]:
+        cutoff = _ID_RE.match(since).group(1) if since and _ID_RE.match(since) else -1
+        cutoff = int(cutoff)
+        return [m for m in self.iter_all()
+                if (mm := _ID_RE.match(str(m.get("id", "")))) and int(mm.group(1)) > cutoff]
+
+    def search(self, query: str, field: str | None = None) -> list[dict[str, Any]]:
+        """Substring search (case-insensitive). field None => all text fields."""
+        q = (query or "").strip().lower()
+        if not q:
+            return []
+        out: list[dict[str, Any]] = []
+        for m in self.iter_all():
+            if field is not None:
+                if q in str(m.get(field, "")).lower():
+                    out.append(m)
+                continue
+            hay = " ".join(str(m.get(k, "")) for k in
+                           ("id", "from", "to", "type", "subject", "body"))
+            if q in hay.lower():
+                out.append(m)
+        return out
+
     def iter_all(self) -> Iterator[dict[str, Any]]:
         with self.messages_path.open(encoding="utf-8") as f:
             for line in f:
@@ -65,3 +107,40 @@ class Store:
                     yield json.loads(line)
                 except json.JSONDecodeError:
                     continue
+
+
+    # ---- 消息管理 (added by openwriter) ----
+
+    def delete(self, msg_id: str) -> bool:
+        """Delete a single message by id. Returns True if found & removed.
+
+        Rewrites the jsonl atomically (tmp + replace). Backs up the
+        previous file to <name>.bak-<ts> once per call.
+        """
+        if not msg_id:
+            return False
+        kept = [m for m in self.iter_all() if m.get("id") != msg_id]
+        removed = len(kept) != sum(1 for _ in self.iter_all())
+        if not removed:
+            return False
+        self._rewrite(kept)
+        return True
+
+    def clear(self) -> int:
+        """Remove ALL messages from this room. Returns count removed."""
+        n = sum(1 for _ in self.iter_all())
+        self._rewrite([])
+        return n
+
+    def _rewrite(self, msgs: list[dict[str, Any]]) -> None:
+        """Atomically replace the messages file with `msgs` (backs up once)."""
+        import time as _time
+        ts = _time.strftime("%Y%m%d-%H%M%S")
+        if self.messages_path.exists() and self.messages_path.stat().st_size > 0:
+            bak = self.messages_path.with_name(self.messages_path.name + f".bak-{ts}")
+            bak.write_bytes(self.messages_path.read_bytes())
+        tmp = self.messages_path.with_suffix(".jsonl.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            for m in msgs:
+                f.write(json.dumps(m, ensure_ascii=False) + "\n")
+        tmp.replace(self.messages_path)

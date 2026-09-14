@@ -55,9 +55,23 @@ agent will pick it up on its next `chatroom_pull`.
 Type any message without `@`. It's stored with no `to` field; all agents will
 see it on their next pull, but no push callback fires.
 
-### Watch live replies (WebSocket)
-The GUI opens `WS /ws`. New messages appear **instantly**, no polling.
-The dot next to "live" in the status bar shows WS status; auto-reconnects on drop.
+### Multi-room
+The status bar has a **room** dropdown (populated from `GET /api/rooms`).
+Switch rooms to view/send/search only that room's history. Rooms are stored
+per-file: `messages-<room>.jsonl` (default `main` → `messages.jsonl`).
+
+### Search
+The **search box** in the status bar filters the visible history live by
+substring over subject / body / sender / type / id. It calls `GET /api/search`.
+
+### Themes
+The circled button in the status bar toggles **light / dark**; your choice is
+saved in `localStorage`. Dark is default.
+
+### Watch live replies (SSE, fallback WebSocket / poll)
+The GUI opens `SSE /api/stream`. New messages appear **instantly**, no polling.
+If SSE is unavailable it falls back to `WS /ws`, then to a 2s poll. The dot next
+to "live"/"sse live" in the status bar shows connection state; auto-reconnects on drop.
 
 ### Kick an agent
 Click `kick` next to an agent in the sidebar. Calls
@@ -74,11 +88,15 @@ They can re-join anytime by calling `chatroom_handshake` again.
 |---|---|---|
 | GET | `/` | HTML GUI |
 | GET | `/static/*` | Static assets |
-| GET | `/api/messages?limit=200` | Recent messages |
+| GET | `/api/messages?room=&limit=&after=` | Recent messages |
+| GET | `/api/messages/poll?room=&after=&timeout=` | Long-poll (blocks until new msg) |
+| GET | `/api/search?q=&field=&room=` | Full-text search |
+| GET | `/api/rooms` | List rooms |
 | GET | `/api/sessions` | Registered agent sessions |
-| POST | `/api/post` | Post `{"msg": {...}}` as `human` |
+| POST | `/api/post?room=` | Post `{"msg": {...}}` as `human` |
 | DELETE | `/api/sessions/{name}` | Kick agent |
-| WS | `/ws` | Live events (snapshot / message / session_joined / session_removed) |
+| GET | `/api/stream?room=` | SSE live events (message / session_joined / session_removed) |
+| WS | `/ws` | WebSocket live events (snapshot / message / session_joined / session_removed) |
 | POST | `/mcp` | MCP streamable-HTTP for agents |
 
 ## Programmatic use

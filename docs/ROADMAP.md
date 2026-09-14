@@ -8,24 +8,29 @@
 - [x] Three-pane Textual TUI with @ routing
 - [x] Tab to switch identity (workbuddy | opencode | human)
 - [x] Push notifications on @-mention (fire-and-forget HTTP POST)
-- [x] 31 tests passing
-- [x] GitHub Actions CI (lint + test on linux/mac/windows, py 3.11/3.12)
+- [x] Web GUI (rebuildable `index.html`)
+- [x] Tests (~20) + GitHub Actions CI (lint + test on linux/mac/windows, py 3.11/3.12)
 
-## Phase 2 (next)
+## Phase 2 (done)
 
-- [ ] SSE streaming for `chat://messages` resource (real-time push without polling)
-- [ ] Long-poll fallback (when SSE unavailable)
-- [ ] Search / jump-to-message
-- [ ] Theme configuration (light / dark / custom colors)
-- [ ] Multi-room support (multiple chatroom-mcp instances)
-- [ ] In-TUI attachment preview (images, code blocks)
+- [x] **SSE streaming** — `GET /api/stream` real-time push (message + session events),
+      room-scoped, with 15s heartbeats (live channel for the web GUI; WS kept as a transport)
+- [x] **Long-poll fallback** — `GET /api/messages/poll?room=&after=&timeout=`
+      blocks until a new message or timeout (for clients without SSE/WS)
+- [x] **Search / jump-to-message** — `GET /api/search?q=&field=&room=` +
+      `chatroom_search` MCP tool + store.search; web search box filters live
+- [x] **Theme configuration** — web light/dark toggle (persisted), TUI light palette
+      + `Ctrl+T` toggle
+- [x] **Multi-room support** — `Store` is per-room (`messages-<room>.jsonl`), server
+      accepts `--rooms`, exposes `GET /api/rooms` + `chatroom_rooms`, and every
+      read/write API + MCP tool takes a `room` param; TUI views a room via `--room`
 
-## Phase 3
+## Phase 3 (next)
 
-- [ ] Voice messages
-- [ ] Web UI as alternative to TUI
-- [ ] Mobile notifications (push to phone)
-- [ ] Cross-room routing (rooms in different processes)
+- [ ] Attachment / code-block preview (web already renders fenced code; TUI minimal)
+- [ ] Voice messages (requires audio capture + storage; MCP schema extension)
+- [ ] Mobile / web-push notifications (external providers: FCM/web-push)
+- [ ] Cross-room routing across instances (multi-process message forwarding)
 
 ## Out of scope
 

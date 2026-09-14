@@ -17,12 +17,33 @@
 | Module | Role |
 |---|---|
 | `chatroom/protocol.py` | Schema validator (compatible with `workbuddy-agent-comms` v2.1) |
-| `chatroom/store.py` | Append-only JSONL store; assigns msg-NNNN ids; atomic via O_APPEND |
+| `chatroom/store.py` | Append-only per-room JSONL store (`messages.jsonl` / `messages-<room>.jsonl`); assigns msg-NNNN ids; atomic via O_APPEND; full-text `search()` |
 | `chatroom/sessions.py` | Agent session registry; persisted to `_sessions.json` |
-| `chatroom/server.py` | MCP server (5 tools + 1 resource) over streamable-HTTP |
+| `chatroom/server.py` | MCP server (7 tools + 1 resource) over streamable-HTTP + REST/SSE/WS (room-aware) |
 | `chatroom/push.py` | Async HTTP callback to agents; fire-and-forget |
-| `chatroom/tui/app.py` | Textual three-pane chatroom with @ routing |
+| `chatroom/hub.py` | Broadcast hub: WebSocket clients + SSE `asyncio.Queue` subscribers |
+| `chatroom/tui/app.py` | Textual three-pane chatroom with @ routing, theme toggle, search |
 | `chatroom/cli.py` | argparse entry; starts server (bg thread) + TUI |
+
+## Transport surface
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/mcp` | POST | MCP streamable-HTTP (FastMCP) |
+| `/` | GET | Web GUI |
+| `/api/messages` | GET | list (`room`, `limit`, `after`) |
+| `/api/messages/poll` | GET | long-poll (`room`, `after`, `timeout`) |
+| `/api/search` | GET | full-text search (`q`, `field`, `room`) |
+| `/api/stream` | GET | SSE real-time push (`room`) |
+| `/api/rooms` | GET | list rooms |
+| `/api/sessions` | GET | list sessions |
+| `/api/post` | POST | post message (`room`) |
+| `/api/sessions/{name}` | DELETE | kick session |
+| `/ws` | WS | WebSocket broadcast + snapshot |
+
+MCP tools: `chatroom_handshake`, `chatroom_pull`, `chatroom_post`
+(`room`), `chatroom_history` (`room`), `chatroom_search` (`q`, `field`, `room`),
+`chatroom_rooms`, `chatroom_sessions`. Resource: `chat://messages`.
 
 ## Message lifecycle
 
@@ -46,8 +67,9 @@ messages.jsonl (append-only)
 
 ## Storage
 
-* Path: `<comms-dir>/messages.jsonl`
+* Path: `<comms-dir>/messages.jsonl` (room `main`) or `<comms-dir>/messages-<room>.jsonl`
 * Format: one JSON object per line, UTF-8, no BOM
+* Messages carry a `room` field set by the server on append
 * Validation: each message must satisfy v2.1 schema
   * `id` (assigned if missing)
   * `from` (sender name)
@@ -56,6 +78,12 @@ messages.jsonl (append-only)
   * `subject` (one-line summary)
   * `brief` required for {plan, request, done}
   * `in_reply_to` required for {done, ack, requestion}
+
+## Real-time delivery preference
+
+Web GUI prefers **SSE** (`/api/stream`), falls back to **WebSocket** (`/ws`),
+then to the 2s **poll** when disconnected. `POST /api/post` broadcasts to all
+three transports via `chatroom/hub.py`.
 
 ## Push flow
 

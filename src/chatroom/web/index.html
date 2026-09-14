@@ -3,12 +3,17 @@
 <head>
 <meta charset="utf-8">
 <title>chatroom-mcp</title>
-<!-- BUILD: 2026-09-14 22:33:52 -->
+<!-- BUILD: 2026-09-14 phase2 multi-room/search/sse/theme -->
 <style>
   :root {
-    --bg: #1e1e1e; --panel: #252525; --border: #333;
-    --text: #ddd; --muted: #888;
+    --bg: #1e1e1e; --panel: #252525; --border: #333; --hover: #2d2d2d;
+    --text: #ddd; --muted: #888; --accent: #4ec9b0;
     --cyan: #4ec9b0; --magenta: #c586c0; --green: #6a9955; --red: #f48771; --yellow: #dcdcaa;
+  }
+  [data-theme="light"] {
+    --bg: #f5f5f5; --panel: #ffffff; --border: #ddd; --hover: #eaeaea;
+    --text: #222; --muted: #888; --accent: #0a7ea4;
+    --cyan: #0891b2; --magenta: #a21caf; --green: #4d7c0f; --red: #dc2626; --yellow: #a16207;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; height: 100vh; overflow: hidden; }
@@ -17,7 +22,7 @@
   #sidebar { background: var(--panel); border-right: 1px solid var(--border); padding: 12px; overflow-y: auto; min-height: 0; }
   #sidebar h2 { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.5px; }
   .agent { display: flex; align-items: center; padding: 6px 8px; border-radius: 4px; margin-bottom: 2px; }
-  .agent:hover { background: #2d2d2d; }
+  .agent:hover { background: var(--hover); }
   .dot { width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; flex: 0 0 8px; }
   .dot.online { background: var(--green); }
   .dot.offline { background: var(--muted); }
@@ -27,54 +32,72 @@
   .kick-btn:hover { color: var(--red); }
   /* Main */
   #main { display: flex; flex-direction: column; min-height: 0; height: 100vh; overflow: hidden; }
-  #status { padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); display: flex; gap: 16px; }
+  #status { padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
   #status .dot { display: inline-block; vertical-align: middle; margin-right: 4px; }
   #messages { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 12px 16px; }
   .msg { margin-bottom: 10px; line-height: 1.45; }
   .msg .meta { font-size: 10px; color: var(--muted); margin-bottom: 2px; }
   .msg .body { white-space: pre-wrap; word-wrap: break-word; }
+  .msg pre { background: var(--hover); border: 1px solid var(--border); border-radius: 4px; padding: 8px; overflow-x: auto; }
+  .msg code { background: var(--hover); padding: 0 3px; border-radius: 3px; }
   .sender-workbuddy { color: var(--cyan); }
   .sender-opencode  { color: var(--magenta); }
   .sender-human     { color: var(--green); }
   .sender-bobo      { color: var(--yellow); }
-  .to-tag { background: #333; padding: 1px 5px; border-radius: 3px; font-size: 10px; margin-left: 4px; }
+  .room-tag, .to-tag { background: var(--hover); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; font-size: 10px; margin-left: 4px; }
   /* Input */
   #input-row { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 8px 12px; background: var(--panel); display: flex; gap: 8px; }
   #input { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 8px; border-radius: 4px; font: inherit; }
-  #input:focus { outline: none; border-color: var(--cyan); }
-  #send-btn { background: var(--cyan); color: #000; border: 0; padding: 0 16px; border-radius: 4px; font: inherit; font-weight: 600; cursor: pointer; }
+  #input:focus { outline: none; border-color: var(--accent); }
+  #send-btn { background: var(--accent); color: #000; border: 0; padding: 0 16px; border-radius: 4px; font: inherit; font-weight: 600; cursor: pointer; }
   #send-btn:hover { opacity: 0.85; }
   .empty { color: var(--muted); padding: 24px; text-align: center; font-style: italic; }
   /* @ mention autocomplete popup */
+  .msg { position: relative; }
+  .del-btn {
+    position: absolute; right: 0; top: 0;
+    background: transparent; border: 0; color: #555; cursor: pointer;
+    font-size: 12px; padding: 0 4px; opacity: 0; transition: opacity .15s;
+  }
+  .msg:hover .del-btn { opacity: 1; }
+  .del-btn:hover { color: var(--red); }
+  .load-more {
+    display: block; width: 100%; margin: 0 0 10px 0;
+    background: #2d2d2d; color: var(--muted); border: 1px dashed var(--border);
+    padding: 6px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 11px;
+  }
+  .load-more:hover { color: var(--text); border-color: var(--muted); }
   #mention-box {
     position: absolute; bottom: 100%; left: 0; right: 0;
-    background: #2d2d2d; border: 1px solid var(--border);
+    background: var(--panel); border: 1px solid var(--border);
     border-bottom: 0; border-radius: 6px 6px 0 0;
     max-height: 220px; overflow-y: auto;
     display: none; z-index: 100;
     box-shadow: 0 -4px 12px rgba(0,0,0,0.4);
   }
   #mention-box.open { display: block; }
-  #mention-box .item {
-    padding: 6px 12px; cursor: pointer; font-size: 12px;
-    display: flex; align-items: center; gap: 8px;
-  }
-  #mention-box .item:hover, #mention-box .item.active {
-    background: #3a3a3a;
-  }
+  #mention-box .item { padding: 6px 12px; cursor: pointer; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+  #mention-box .item:hover, #mention-box .item.active { background: var(--hover); }
   #mention-box .item .dot { width: 6px; height: 6px; }
   #mention-box .item .mname { font-weight: 600; }
   #mention-box .item .mstatus { color: var(--muted); font-size: 10px; margin-left: auto; }
   #mention-box .empty { padding: 10px 12px; color: var(--muted); font-size: 11px; font-style: italic; }
   #input-wrap { position: relative; flex: 1; }
-
+  select.ctl, button.ctl, input.search {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 6px; font: inherit; cursor: pointer;
+  }
+  #search-box { flex: 0 1 220px; }
 </style>
+<link rel="icon" href="data:,">
 </head>
 <body>
 <div id="app">
   <aside id="sidebar">
     <h2>Connected agents</h2>
     <div id="agents"></div>
+    <h2 style="margin-top:20px">Rooms</h2>
+    <div id="room-list" style="font-size:11px; color:var(--muted)"></div>
     <h2 style="margin-top:20px">Tips</h2>
     <div style="font-size:11px; color:var(--muted); line-height:1.6">
       <div>Type <code>@agent</code> to push to that agent.</div>
@@ -83,7 +106,16 @@
     </div>
   </aside>
   <main id="main">
-    <div id="status"><span><span id="ws-dot" class="dot"></span><span id="ws-text">connecting...</span></span><span id="agent-count">0 agents</span><span id="msg-count">0 messages</span><span id="build" title="build time" style="color:#555">build 2026-09-14 22:33:52</span><button id="refresh-btn" style="background:#333;color:#ddd;border:0;padding:2px 8px;border-radius:3px;cursor:pointer;font:inherit;margin-left:auto">Refresh</button></div>
+    <div id="status">
+      <span><span id="ws-dot" class="dot"></span><span id="ws-text">connecting...</span></span>
+      <select id="room-select" class="ctl" title="room"></select>
+      <span id="agent-count">0 agents</span>
+      <span id="msg-count">0 messages</span>
+      <input id="search-box" class="search" type="text" placeholder="search messages" autocomplete="off">
+      <button id="theme-btn" class="ctl" title="toggle light/dark theme">&#9681;</button>
+      <button id="clear-btn" class="ctl" style="margin-left:auto" title="clear all messages in this room">Clear</button>
+      <button id="refresh-btn" class="ctl">Refresh</button>
+    </div>
     <div id="messages"></div>
     <form id="input-row">
       <div id="input-wrap">
@@ -96,17 +128,43 @@
 </div>
 <script>
 const SENDER_COLORS = { workbuddy: 'sender-workbuddy', opencode: 'sender-opencode', human: 'sender-human', bobo: 'sender-bobo' };
-const KNOWN_AGENTS = ['workbuddy', 'opencode', 'human', 'bobo'];
-const BUILD = "2026-09-14 22:33:52";
 let messages = [];
 let seenIds = new Set();
 let sessions = new Map();
+let rooms = [];
+let currentRoom = 'main';
+let searchQuery = '';
 let ws = null;
+let sse = null;
 
 function $(id) { return document.getElementById(id); }
 
 function ts(iso) {
   try { return new Date(iso).toLocaleTimeString('en-GB', { hour12: false }); } catch { return '??:??'; }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// render subject+body with fenced code blocks highlighted + inline code
+function renderBody(m) {
+  const raw = (m.body || m.subject || '').toString();
+  const subj = m.body ? m.subject : null;
+  const lines = (subj ? subj + '\n' + raw : raw).split('\n');
+  let html = '';
+  let inCode = false;
+  for (const ln of lines) {
+    if (ln.trim().startsWith('```')) {
+      if (!inCode) { html += '<pre>'; inCode = true; }
+      else { html += '</pre>'; inCode = false; }
+      continue;
+    }
+    if (inCode) { html += escapeHtml(ln) + '\n'; continue; }
+    html += escapeHtml(ln).replace(/`([^`]+)`/g, '<code>$1</code>') + '\n';
+  }
+  if (inCode) html += '</pre>';
+  return html.trimEnd() || '(empty)';
 }
 
 function renderAgents() {
@@ -128,21 +186,37 @@ function renderAgents() {
     kick.className = 'kick-btn';
     kick.textContent = 'kick';
     kick.onclick = () => kickAgent(name);
-    div.appendChild(dot);
-    div.appendChild(nameSpan);
-    div.appendChild(kick);
+    div.appendChild(dot); div.appendChild(nameSpan); div.appendChild(kick);
     el.appendChild(div);
   }
 }
 
+function renderRoomList() {
+  const el = $('room-list');
+  el.innerHTML = (rooms.length ? rooms : ['main'])
+    .map(r => '<div style="padding:2px 0">' + escapeHtml(r) + (r === currentRoom ? ' <b>&#9679;</b>' : '') + '</div>')
+    .join('');
+  const sel = $('room-select');
+  sel.innerHTML = (rooms.length ? rooms : ['main']).map(r =>
+    '<option value="' + escapeHtml(r) + '"' + (r === currentRoom ? ' selected' : '') + '>' + escapeHtml(r) + '</option>'
+  ).join('');
+}
+
+function matchesSearch(m) {
+  if (!searchQuery) return true;
+  const hay = (m.subject + ' ' + (m.body || '') + ' ' + (m.from || '') + ' ' + (m.type || '') + ' ' + (m.id || '')).toLowerCase();
+  return hay.includes(searchQuery.toLowerCase());
+}
+
 function renderMessages() {
   const el = $('messages');
-  if (messages.length === 0) {
-    el.innerHTML = '<div class="empty">No messages yet. Type below to start chatting.</div>';
+  const list = messages.filter(matchesSearch);
+  if (list.length === 0) {
+    el.innerHTML = '<div class="empty">' + (searchQuery ? 'No matches for "' + searchQuery + '".' : 'No messages yet. Type below to start chatting.') + '</div>';
     return;
   }
   el.innerHTML = '';
-  for (const m of messages) {
+  for (const m of list) {
     const sender = m.from || '?';
     const cls = SENDER_COLORS[sender] || '';
     const wrap = document.createElement('div');
@@ -150,194 +224,196 @@ function renderMessages() {
     const meta = document.createElement('div');
     meta.className = 'meta';
     const senderSpan = document.createElement('span');
-    senderSpan.className = cls;
-    senderSpan.style.fontWeight = '600';
-    senderSpan.textContent = sender;
+    senderSpan.className = cls; senderSpan.style.fontWeight = '600'; senderSpan.textContent = sender;
     meta.appendChild(senderSpan);
     meta.appendChild(document.createTextNode(' \u00b7 ' + ts(m.timestamp) + ' \u00b7 ' + (m.id || '') + ' \u00b7 type=' + (m.type || '')));
+    if (m.room && m.room !== currentRoom) {
+      const rt = document.createElement('span'); rt.className = 'room-tag'; rt.textContent = 'room: ' + m.room; meta.appendChild(rt);
+    }
     if (m.to) {
-      const tag = document.createElement('span');
-      tag.className = 'to-tag';
-      tag.textContent = 'to: ' + m.to;
-      meta.appendChild(tag);
+      const tag = document.createElement('span'); tag.className = 'to-tag'; tag.textContent = 'to: ' + m.to; meta.appendChild(tag);
     }
     const body = document.createElement('div');
     body.className = 'body';
-    body.textContent = m.subject + (m.body ? '\n' + m.body : '');
-    wrap.appendChild(meta);
-    wrap.appendChild(body);
+    body.innerHTML = renderBody(m);
+    wrap.appendChild(meta); wrap.appendChild(body);
     el.appendChild(wrap);
   }
   el.scrollTop = el.scrollHeight;
 }
 
+// ---- message management (added by openwriter) ----
+const PAGE_SIZE = 200;
+
+async function deleteMessage(msgId) {
+  if (!msgId) return;
+  if (!confirm('Delete message ' + msgId + '?')) return;
+  try {
+    const r = await fetch('/api/messages/' + encodeURIComponent(msgId) + '?room=' + encodeURIComponent(currentRoom), { method: 'DELETE' });
+    if (!r.ok) { alert('delete failed: ' + r.status); return; }
+  } catch (e) { alert('delete error: ' + e); return; }
+  messages = messages.filter((m) => m.id !== msgId);
+  seenIds.delete(msgId);
+  renderMessages(); updateStatus();
+}
+
+async function clearMessages() {
+  if (!confirm('Clear ALL messages in room "' + currentRoom + '"?\n(a backup .bak-* file is kept on disk)')) return;
+  try {
+    const r = await fetch('/api/messages?room=' + encodeURIComponent(currentRoom), { method: 'DELETE' });
+    if (!r.ok) { alert('clear failed: ' + r.status); return; }
+    const data = await r.json();
+    messages = []; seenIds = new Set();
+    renderMessages(); updateStatus();
+    $('ws-text').textContent = 'cleared ' + data.cleared + ' messages';
+  } catch (e) { alert('clear error: ' + e); }
+}
+
+async function loadOlder() {
+  const first = messages.length ? messages[0].id : null;
+  if (!first) return;
+  try {
+    const r = await fetch('/api/messages?room=' + encodeURIComponent(currentRoom) + '&limit=' + PAGE_SIZE + '&before=' + encodeURIComponent(first));
+    const data = await r.json();
+    const older = data.messages || [];
+    if (older.length === 0) { $('ws-text').textContent = 'no older messages'; return; }
+    for (const m of older) if (m.id && !seenIds.has(m.id)) { messages.unshift(m); seenIds.add(m.id); }
+    messages.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    renderMessages(); updateStatus();
+    $('ws-text').textContent = 'loaded ' + older.length + ' older';
+  } catch (e) { alert('load older error: ' + e); }
+}
+
 function updateStatus() {
   $('agent-count').textContent = sessions.size + ' agent' + (sessions.size === 1 ? '' : 's');
   $('msg-count').textContent = messages.length + ' message' + (messages.length === 1 ? '' : 's');
-  renderAgents();
+  renderAgents(); renderRoomList();
+}
+
+async function loadRooms() {
+  try { const r = await fetch('/api/rooms').then(r => r.json()); rooms = r.rooms || ['main']; }
+  catch (e) { rooms = ['main']; }
+  if (!rooms.includes(currentRoom)) currentRoom = rooms[0] || 'main';
+  renderRoomList();
 }
 
 async function loadInitial() {
+  await loadRooms();
   try {
     const [m, s] = await Promise.all([
-      fetch('/api/messages?limit=200').then(r => r.json()),
+      fetch('/api/messages?limit=200&room=' + encodeURIComponent(currentRoom)).then(r => r.json()),
       fetch('/api/sessions').then(r => r.json()),
     ]);
-    mergeSnapshot(m.messages || []);
+    mergeInto(m.messages || []);
     sessions = new Map();
     for (const sess of s.sessions || []) sessions.set(sess.name, sess);
-    renderMessages();
-    updateStatus();
-  } catch (e) {
-    console.error('initial load failed', e);
-  }
+    renderMessages(); updateStatus();
+  } catch (e) { console.error('initial load failed', e); }
 }
 
 async function postMessage(text) {
   text = text.trim();
   if (!text) return;
-  let target = null;
-  let body = text;
-  const m = text.match(/^@(\S+)\s*(.*)$/s);
-  if (m) { target = m[1]; body = m[2]; }
-  const msg = {
-    from: 'human',
-    type: 'finding',
-    timestamp: new Date().toISOString(),
-    subject: body.slice(0, 140) || '(empty)',
-    body: body,
-  };
+  let target = null; let body = text;
+  const mm = text.match(/^@(\S+)\s*(.*)$/s);
+  if (mm) { target = mm[1]; body = mm[2]; }
+  const msg = { from: 'human', type: 'finding', timestamp: new Date().toISOString(), subject: body.slice(0, 140) || '(empty)', body: body };
   if (target) msg.to = target;
   try {
-    const r = await fetch('/api/post', {
+    const r = await fetch('/api/post?room=' + encodeURIComponent(currentRoom), {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ msg }),
     });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      alert('post failed: ' + (err.detail || r.statusText));
-    }
-  } catch (e) {
-    alert('post error: ' + e);
-  }
+    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('post failed: ' + (err.detail || r.statusText)); }
+  } catch (e) { alert('post error: ' + e); }
 }
 
 async function kickAgent(name) {
   if (!confirm('Kick agent "' + name + '"? They will be removed from this chatroom until they handshake again.')) return;
   try {
     const r = await fetch('/api/sessions/' + encodeURIComponent(name), { method: 'DELETE' });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({}));
-      alert('kick failed: ' + (err.detail || r.statusText));
-    }
-  } catch (e) {
-    alert('kick error: ' + e);
-  }
+    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('kick failed: ' + (err.detail || r.statusText)); }
+  } catch (e) { alert('kick error: ' + e); }
 }
 
-
-function addMessage(m) {
-  if (!m || !m.id) return false;
-  if (seenIds.has(m.id)) return false;
-  seenIds.add(m.id);
-  messages.push(m);
-  return true;
-}
-
-function mergeSnapshot(list) {
-  messages = [];
-  seenIds = new Set();
+function addMessage(m) { if (!m || !m.id || seenIds.has(m.id)) return false; seenIds.add(m.id); messages.push(m); return true; }
+function mergeInto(list) {
+  // reload from a room switch: rebuild the local list from the room snapshot
+  if (currentRoom !== lastRoom) { messages = []; seenIds = new Set(); }
   for (const m of list || []) addMessage(m);
   messages.sort((a, b) => String(a.id).localeCompare(String(b.id)));
 }
+let lastRoom = null;
 
-let pollTimer = null;
-async function pollOnce() {
-  try {
-    const r = await fetch('/api/messages?limit=200');
-    const data = await r.json();
-    const list = data.messages || [];
-    let changed = false;
-    for (const m of list) if (addMessage(m)) changed = true;
-    if (changed) {
-      messages.sort((a, b) => String(a.id).localeCompare(String(b.id)));
-      renderMessages();
-      updateStatus();
-    }
-    const sr = await fetch('/api/sessions');
-    const sdata = await sr.json();
-    const nextSessions = new Map();
-    for (const s of sdata.sessions || []) nextSessions.set(s.name, s);
-    // Always replace + re-render (cheap; keeps sidebar fresh)
-    sessions = nextSessions;
-    renderAgents();
-    $('agent-count').textContent = sessions.size + ' agent' + (sessions.size === 1 ? '' : 's');
-  } catch (e) { /* ignore */ }
+async function reloadRoom() {
+  const r = await fetch('/api/messages?limit=500&room=' + encodeURIComponent(currentRoom)).then(r => r.json());
+  mergeInto(r.messages || []);
+  renderMessages(); updateStatus();
 }
 
 function connectWS() {
+  try { ws && ws.close(); } catch (e) {}
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = proto + '//' + location.host + '/ws';
   ws = new WebSocket(url);
-  $('ws-dot').className = 'dot online';
-  $('ws-text').textContent = 'live';
-  ws.onmessage = (e) => {
-    let evt;
-    try { evt = JSON.parse(e.data); } catch { return; }
-    if (evt.kind === 'snapshot') {
-      mergeSnapshot(evt.messages);
-      sessions = new Map();
-      for (const s of evt.sessions || []) sessions.set(s.name, s);
-      renderMessages();
-      updateStatus();
-    } else if (evt.kind === 'message') {
-      if (addMessage(evt.message)) {
-        messages.sort((a, b) => String(a.id).localeCompare(String(b.id)));
-        renderMessages();
-        updateStatus();
-      }
-    } else if (evt.kind === 'session_joined') {
-      sessions.set(evt.session.name, evt.session);
-      updateStatus();
-    } else if (evt.kind === 'session_removed') {
-      sessions.delete(evt.name);
-      updateStatus();
-    }
-  };
-  ws.onopen = () => {
-    $('ws-dot').className = 'dot online';
-    $('ws-text').textContent = 'live';
-  };
-  ws.onclose = () => {
-    $('ws-dot').className = 'dot offline';
-    $('ws-text').textContent = 'reconnecting... (polling for updates)';
-    setTimeout(connectWS, 3000);
-  };
+  ws.onopen = () => { $('ws-dot').className = 'dot online'; $('ws-text').textContent = 'live'; };
+  ws.onmessage = (e) => { handleEvent(JSON.parse(e.data)); };
+  ws.onclose = () => { $('ws-dot').className = 'dot offline'; $('ws-text').textContent = 'polling...'; setTimeout(connectWS, 3000); };
   ws.onerror = () => { try { ws.close(); } catch {} };
 }
 
+function handleEvent(evt) {
+  if (evt.kind === 'snapshot') {
+    messages = []; seenIds = new Set();
+    if (evt.rooms) rooms = evt.rooms;
+    for (const m of evt.messages || []) addMessage(m);
+    sessions = new Map();
+    for (const s of evt.sessions || []) sessions.set(s.name, s);
+    renderMessages(); updateStatus();
+  } else if (evt.kind === 'message') {
+    if (evt.message.room && evt.message.room !== currentRoom) return;
+    if (addMessage(evt.message)) { messages.sort((a,b)=>String(a.id).localeCompare(String(b.id))); renderMessages(); updateStatus(); }
+  } else if (evt.kind === 'session_joined') { sessions.set(evt.session.name, evt.session); updateStatus(); }
+  else if (evt.kind === 'session_removed') { sessions.delete(evt.name); updateStatus(); }
+}
+
+function connectSSE() {
+  if (sse) { try { sse.close(); } catch (e) {} sse = null; }
+  if (typeof EventSource === 'undefined') return;
+  sse = new EventSource('/api/stream?room=' + encodeURIComponent(currentRoom));
+  sse.onopen = () => { $('ws-dot').className = 'dot online'; $('ws-text').textContent = 'sse live'; };
+  sse.onmessage = (e) => { try { handleEvent(JSON.parse(e.data)); } catch (err) {} };
+  sse.onerror = () => { $('ws-dot').className = 'dot offline'; $('ws-text').textContent = 'sse reconnect...'; };
+}
+
+// ---- theme ----
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark';
+  $('theme-btn').textContent = t === 'light' ? '\u263E' : '\u2687';
+  try { localStorage.setItem('chatroom_theme', t); } catch (e) {}
+}
+function initTheme() {
+  let t = 'dark';
+  try { t = localStorage.getItem('chatroom_theme') || 'dark'; } catch (e) {}
+  applyTheme(t);
+}
+
+// ---- search ----
+function onSearch() { searchQuery = $('search-box').value.trim(); renderMessages(); }
 
 // ---- @ mention autocomplete ----
 const mentionBox = () => $('mention-box');
-let mentionOpen = false;
-let mentionIndex = 0;
-let mentionMatches = [];
-
+let mentionOpen = false, mentionIndex = 0, mentionMatches = [];
 function getMentionQuery() {
-  const input = $('input');
-  const val = input.value;
-  const pos = input.selectionStart;
-  // Find last @ before cursor with no whitespace after it
-  const upto = val.slice(0, pos);
-  const at = upto.lastIndexOf('@');
+  const input = $('input'); const val = input.value; const pos = input.selectionStart;
+  const upto = val.slice(0, pos); const at = upto.lastIndexOf('@');
   if (at === -1) return null;
-  // Must be at start or preceded by whitespace
   if (at > 0 && !/\s/.test(val[at - 1])) return null;
   const query = upto.slice(at + 1);
   if (/\s/.test(query)) return null;
   return { at, query };
 }
-
+function closeMention() { mentionOpen = false; mentionIndex = 0; mentionMatches = []; mentionBox().classList.remove('open'); }
 function openMention(query) {
   const inf = getMentionQuery();
   if (inf === null) { closeMention(); return; }
@@ -346,107 +422,81 @@ function openMention(query) {
   mentionMatches = names.filter((n) => n.toLowerCase().includes(q));
   const box = mentionBox();
   box.innerHTML = '';
-  if (mentionMatches.length === 0) {
-    box.innerHTML = '<div class="empty">No agents connected.</div>';
-    box.classList.add('open');
-    mentionOpen = true;
-    return;
-  }
+  if (mentionMatches.length === 0) { box.innerHTML = '<div class="empty">No agents connected.</div>'; box.classList.add('open'); mentionOpen = true; return; }
   mentionIndex = Math.min(mentionIndex, mentionMatches.length - 1);
   mentionMatches.forEach((name, i) => {
     const sess = sessions.get(name) || {};
     const item = document.createElement('div');
     item.className = 'item' + (i === mentionIndex ? ' active' : '');
-    const dot = document.createElement('span');
-    dot.className = 'dot ' + (sess.status === 'online' ? 'online' : 'offline');
-    const nm = document.createElement('span');
-    nm.className = 'mname';
-    nm.textContent = name;
-    const st = document.createElement('span');
-    st.className = 'mstatus';
-    st.textContent = sess.status || '';
-    item.appendChild(dot);
-    item.appendChild(nm);
-    item.appendChild(st);
+    const dot = document.createElement('span'); dot.className = 'dot ' + (sess.status === 'online' ? 'online' : 'offline');
+    const nm = document.createElement('span'); nm.className = 'mname'; nm.textContent = name;
+    const st = document.createElement('span'); st.className = 'mstatus'; st.textContent = sess.status || '';
+    item.appendChild(dot); item.appendChild(nm); item.appendChild(st);
     item.onmousedown = (e) => { e.preventDefault(); insertMention(name); };
     box.appendChild(item);
   });
-  box.classList.add('open');
-  mentionOpen = true;
+  box.classList.add('open'); mentionOpen = true;
 }
-
-function closeMention() {
-  mentionOpen = false;
-  mentionIndex = 0;
-  mentionMatches = [];
-  mentionBox().classList.remove('open');
-}
-
 function insertMention(name) {
-  const input = $('input');
-  const inf = getMentionQuery();
+  const input = $('input'); const inf = getMentionQuery();
   if (!inf) { closeMention(); return; }
-  const val = input.value;
-  const pos = input.selectionStart;
-  const before = val.slice(0, inf.at);
-  const after = val.slice(pos);
-  input.value = before + '@' + name + ' ' + after;
-  const newPos = before.length + name.length + 2;
-  input.setSelectionRange(newPos, newPos);
-  closeMention();
-  input.focus();
+  const val = input.value; const pos = input.selectionStart;
+  input.value = val.slice(0, inf.at) + '@' + name + ' ' + val.slice(pos);
+  const newPos = inf.at + name.length + 2;
+  input.setSelectionRange(newPos, newPos); closeMention(); input.focus();
 }
 
 document.addEventListener('input', (e) => {
   if (e.target && e.target.id === 'input') {
     const inf = getMentionQuery();
-    if (inf) { mentionIndex = 0; openMention(inf.query); }
-    else closeMention();
+    if (inf) { mentionIndex = 0; openMention(inf.query); } else closeMention();
   }
 });
 
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   loadInitial();
+  connectSSE();
   connectWS();
-  // Belt-and-braces: poll every 2s in case WS drops (dedup keeps it safe)
-  pollTimer = setInterval(pollOnce, 2000);
-  document.getElementById('refresh-btn').addEventListener('click', async () => {
-    await pollOnce();
-    $('ws-text').textContent = 'refreshed';
+  let pollTimer = setInterval(async () => {
+    try {
+      const r = await fetch('/api/messages?limit=200&room=' + encodeURIComponent(currentRoom));
+      const data = await r.json();
+      let changed = false;
+      for (const m of data.messages || []) if (addMessage(m)) changed = true;
+      if (changed) { messages.sort((a,b)=>String(a.id).localeCompare(String(b.id))); renderMessages(); updateStatus(); }
+      const sr = await fetch('/api/sessions'); const sdata = await sr.json();
+      sessions = new Map(); for (const s of sdata.sessions || []) sessions.set(s.name, s);
+      renderAgents(); $('agent-count').textContent = sessions.size + ' agent' + (sessions.size === 1 ? '' : 's');
+    } catch (e) {}
+  }, 2000);
+
+  const _clearBtn = document.getElementById('clear-btn');
+  if (_clearBtn) _clearBtn.addEventListener('click', clearMessages);
+  $('refresh-btn').addEventListener('click', async () => { await loadInitial(); $('ws-text').textContent = 'refreshed'; });
+  $('theme-btn').addEventListener('click', () => {
+    const cur = document.documentElement.dataset.theme;
+    applyTheme(cur === 'light' ? 'dark' : 'light');
   });
+  $('search-box').addEventListener('input', onSearch);
+  $('room-select').addEventListener('change', async (e) => {
+    currentRoom = e.target.value; lastRoom = currentRoom; await reloadRoom(); connectSSE();
+  });
+
   const form = document.querySelector('#input-row');
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    if (mentionOpen && mentionMatches.length > 0) {
-      insertMention(mentionMatches[mentionIndex]);
-      return;
-    }
-    const input = $('input');
-    postMessage(input.value);
-    input.value = '';
-    closeMention();
+    if (mentionOpen && mentionMatches.length > 0) { insertMention(mentionMatches[mentionIndex]); return; }
+    const input = $('input'); postMessage(input.value); input.value = ''; closeMention();
   });
-
   const inp = $('input');
   inp.addEventListener('keydown', (e) => {
     if (!mentionOpen) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      mentionIndex = (mentionIndex + 1) % mentionMatches.length;
-      openMention();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      mentionIndex = (mentionIndex - 1 + mentionMatches.length) % mentionMatches.length;
-      openMention();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      closeMention();
-    } else if (e.key === 'Tab') {
-      e.preventDefault();
-      if (mentionMatches.length > 0) insertMention(mentionMatches[mentionIndex]);
-    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); mentionIndex = (mentionIndex + 1) % mentionMatches.length; openMention(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); mentionIndex = (mentionIndex - 1 + mentionMatches.length) % mentionMatches.length; openMention(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeMention(); }
+    else if (e.key === 'Tab') { e.preventDefault(); if (mentionMatches.length > 0) insertMention(mentionMatches[mentionIndex]); }
   });
-
   inp.addEventListener('blur', () => setTimeout(closeMention, 150));
 });
 </script>

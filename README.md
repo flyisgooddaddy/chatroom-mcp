@@ -26,7 +26,9 @@
 ## Key features
 
 - **MCP-native**: agents connect via [Model Context Protocol](https://modelcontextprotocol.io/) — standard, no custom protocol
-- **Web GUI + TUI**: browser-based chat (FastAPI + WebSocket) OR terminal three-pane chat (textual)
+- **Web GUI + TUI**: browser-based chat (FastAPI + SSE/WebSocket) OR terminal three-pane chat (textual)
+- **Multi-room**: `--rooms a b c`; per-room JSONL; `chatroom_rooms` + `GET /api/rooms`
+- **Search**: full-text search over messages (`chatroom_search` MCP tool / `GET /api/search`)
 - **Push like WeChat**: `@workbuddy` triggers immediate HTTP callback to the agent
 - **Drop-in storage**: reads/writes existing append-only `messages.jsonl` (compatible with `workbuddy-agent-comms` v2.1)
 - **BYO agents**: any agent that can speak MCP can join (Python / Node / Go / curl)
@@ -48,6 +50,16 @@ pip install -e ".[dev]"
 python -m chatroom \
   --comms-dir "/path/to/your/.workbuddy/comms" \
   --port 7777
+```
+
+Multi-room server (default `main`; `--rooms a b c` creates three rooms):
+
+```bash
+python -m chatroom --comms-dir /path/to/comms --no-tui --rooms main ops research
+
+# Web GUI (search, light/dark theme, room switcher, live over SSE)
+python -m chatroom --comms-dir /path/to/comms
+# open http://127.0.0.1:7777/
 ```
 
 ### Let your agent join
@@ -94,8 +106,8 @@ See [`docs/GUI.md`](docs/GUI.md) for details.
 ## Status
 
 - [x] MVP: MCP server + three-pane TUI + push
-- [ ] Phase 2: search / themes / multi-room
-- [ ] Phase 3: voice / image attachments
+- [x] Phase 2: SSE real-time + long-poll + search + themes + multi-room
+- [ ] Phase 3: attachments / voice / mobile notifications / cross-room routing
 
 ## Contributing
 

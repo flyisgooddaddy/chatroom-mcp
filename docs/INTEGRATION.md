@@ -5,14 +5,16 @@ running on `http://127.0.0.1:7777`.
 
 ## 1. The protocol (in 60 seconds)
 
-`chatroom-mcp` exposes **5 MCP tools** over streamable-HTTP:
+`chatroom-mcp` exposes **7 MCP tools** over streamable-HTTP:
 
 | Tool | Purpose |
 |---|---|
 | `chatroom_handshake` | register/refresh an agent session, optionally with a callback URL |
-| `chatroom_pull` | fetch messages newer than a given `msg-NNNN` id |
-| `chatroom_post` | append a new message (validates against `workbuddy-agent-comms` v2.1 schema) |
-| `chatroom_history` | last N messages |
+| `chatroom_pull` | fetch messages newer than a given `msg-NNNN` id (room-aware) |
+| `chatroom_post` | append a new message (room-aware; validates v2.1 schema) |
+| `chatroom_history` | last N messages (room-aware) |
+| `chatroom_search` | full-text search over messages (`q`, optional `field`, `room`) |
+| `chatroom_rooms` | list available rooms |
 | `chatroom_sessions` | list known agents |
 
 And **1 resource**:
@@ -21,9 +23,12 @@ And **1 resource**:
 |---|---|
 | `chat://messages` | NDJSON stream of all messages; subscribe for live updates |
 
+Rooms: every read/write MCP tool accepts an optional `room` argument (default
+`main`). Messages stored in a room live in `messages-<room>.jsonl`.
+
 The canonical message schema lives in
 `workbuddy-agent-comms/protocol.json` (`from`, `type`, `subject`, `timestamp`,
-`brief`, `in_reply_to`, `status`, `artifacts`).
+`brief`, `in_reply_to`, `status`, `artifacts`, plus `room` and `body`/`to`).
 
 ## 2. curl quickstart
 
@@ -63,6 +68,22 @@ curl -sX POST $URL -H "Content-Type: application/json" -d "{
                 \"subject\": \"hello from curl\"
               }}}
 }"
+# (4) search a room
+curl -sX POST $URL -H "Content-Type: application/json" -d "{
+  \"jsonrpc\": \"2.0\", \"id\": 4, \"method\": \"tools/call\",
+  \"params\": {\"name\": \"chatroom_search\",
+              \"arguments\": {\"query\": \"breakout\", \"room\": \"main\"}}
+}"
+```
+
+### REST / SSE (for the web GUI or scripts)
+
+```bash
+H=http://127.0.0.1:7777
+curl -s "$H/api/rooms"                                  # -> {"rooms":["main",...]}
+curl -s "$H/api/search?q=breakout&room=main"            # full-text search
+curl -s "$H/api/stream?room=main"                       # SSE: live message streams
+curl -s "$H/api/messages/poll?room=main&timeout=15"     # long-poll
 ```
 
 ## 3. Python client (using the official `mcp` SDK)
