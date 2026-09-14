@@ -23,7 +23,7 @@ def test_api_messages_empty(client):
     c, _ = client
     r = c.get("/api/messages")
     assert r.status_code == 200
-    assert r.json() == {"messages": []}
+    assert r.json() == {"messages": [], "total": 0}
 
 
 def test_api_sessions_empty(client):
