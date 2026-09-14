@@ -40,13 +40,13 @@ class Store:
         return last + 1
 
     def append(self, msg: dict[str, Any]) -> dict[str, Any]:
-        ok, reason = is_well_formed(msg)
-        if not ok:
-            raise ValueError(f"invalid message: {reason}")
         if "id" not in msg:
             msg["id"] = f"msg-{self._next_id():04d}"
         if "timestamp" not in msg:
             msg["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        ok, reason = is_well_formed(msg)
+        if not ok:
+            raise ValueError(f"invalid message: {reason}")
         # O_APPEND is atomic for small writes on POSIX and Windows
         with self.messages_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(msg, ensure_ascii=False) + "\n")
