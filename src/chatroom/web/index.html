@@ -59,7 +59,7 @@
     </div>
   </aside>
   <main id="main">
-    <div id="status"><span><span id="ws-dot" class="dot"></span><span id="ws-text">connecting...</span></span><span id="agent-count">0 agents</span><span id="msg-count">0 messages</span></div>
+    <div id="status"><span><span id="ws-dot" class="dot"></span><span id="ws-text">connecting...</span></span><span id="agent-count">0 agents</span><span id="msg-count">0 messages</span><button id="refresh-btn" style="background:#333;color:#ddd;border:0;padding:2px 8px;border-radius:3px;cursor:pointer;font:inherit;margin-left:auto">Refresh</button></div>
     <div id="messages"></div>
     <form id="input-row">
       <input id="input" type="text" placeholder="Type a message... use @agent to push to one agent" autocomplete="off" autofocus>
@@ -71,6 +71,7 @@
 const SENDER_COLORS = { workbuddy: 'sender-workbuddy', opencode: 'sender-opencode', human: 'sender-human', bobo: 'sender-bobo' };
 const KNOWN_AGENTS = ['workbuddy', 'opencode', 'human', 'bobo'];
 let messages = [];
+let seenIds = new Set();
 let sessions = new Map();
 let ws = null;
 
@@ -205,6 +206,46 @@ async function kickAgent(name) {
   }
 }
 
+
+function addMessage(m) {
+  if (!m || !m.id) return false;
+  if (seenIds.has(m.id)) return false;
+  seenIds.add(m.id);
+  messages.push(m);
+  return true;
+}
+
+function mergeSnapshot(list) {
+  messages = [];
+  seenIds = new Set();
+  for (const m of list || []) addMessage(m);
+  messages.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+}
+
+let pollTimer = null;
+async function pollOnce() {
+  try {
+    const r = await fetch('/api/messages?limit=200');
+    const data = await r.json();
+    const list = data.messages || [];
+    let changed = false;
+    for (const m of list) if (addMessage(m)) changed = true;
+    if (changed) {
+      messages.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      renderMessages();
+      updateStatus();
+    }
+    const sr = await fetch('/api/sessions');
+    const sdata = await sr.json();
+    const nextSessions = new Map();
+    for (const s of sdata.sessions || []) nextSessions.set(s.name, s);
+    if (nextSessions.size !== sessions.size) {
+      sessions = nextSessions;
+      updateStatus();
+    }
+  } catch (e) { /* ignore */ }
+}
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = proto + '//' + location.host + '/ws';
@@ -215,15 +256,17 @@ function connectWS() {
     let evt;
     try { evt = JSON.parse(e.data); } catch { return; }
     if (evt.kind === 'snapshot') {
-      messages = evt.messages || [];
+      mergeSnapshot(evt.messages);
       sessions = new Map();
       for (const s of evt.sessions || []) sessions.set(s.name, s);
       renderMessages();
       updateStatus();
     } else if (evt.kind === 'message') {
-      messages.push(evt.message);
-      renderMessages();
-      updateStatus();
+      if (addMessage(evt.message)) {
+        messages.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+        renderMessages();
+        updateStatus();
+      }
     } else if (evt.kind === 'session_joined') {
       sessions.set(evt.session.name, evt.session);
       updateStatus();
@@ -232,9 +275,13 @@ function connectWS() {
       updateStatus();
     }
   };
+  ws.onopen = () => {
+    $('ws-dot').className = 'dot online';
+    $('ws-text').textContent = 'live';
+  };
   ws.onclose = () => {
     $('ws-dot').className = 'dot offline';
-    $('ws-text').textContent = 'disconnected; retry in 3s';
+    $('ws-text').textContent = 'reconnecting... (polling for updates)';
     setTimeout(connectWS, 3000);
   };
   ws.onerror = () => { try { ws.close(); } catch {} };
@@ -243,6 +290,12 @@ function connectWS() {
 document.addEventListener('DOMContentLoaded', () => {
   loadInitial();
   connectWS();
+  // Belt-and-braces: poll every 2s in case WS drops (dedup keeps it safe)
+  pollTimer = setInterval(pollOnce, 2000);
+  document.getElementById('refresh-btn').addEventListener('click', async () => {
+    await pollOnce();
+    $('ws-text').textContent = 'refreshed';
+  });
   const form = document.querySelector('#input-row');
   form.addEventListener('submit', (e) => {
     e.preventDefault();

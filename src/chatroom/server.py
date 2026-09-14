@@ -50,6 +50,11 @@ async def _notify_and_broadcast(stored: dict[str, Any], sessions) -> None:
     """Fire push to @-target agent (best-effort) + broadcast to WS clients."""
     target = stored.get("to")
     if target:
+        # Reload sessions from disk: agents may have registered in other processes
+        try:
+            sessions._load()
+        except Exception:
+            pass
         sess = sessions.get(target)
         if sess and sess.callback_url:
             try:
@@ -151,6 +156,7 @@ def create_app(comms_dir: Path) -> FastAPI:
 
     @app.get("/api/sessions")
     async def api_sessions() -> dict[str, Any]:
+        sessions._load()  # pick up agents registered by other processes
         return {"sessions": [s.to_dict() for s in sessions.all()]}
 
     @app.post("/api/post")
@@ -170,6 +176,7 @@ def create_app(comms_dir: Path) -> FastAPI:
     @app.delete("/api/sessions/{name}")
     async def api_kick(name: str) -> dict[str, Any]:
         """Remove a session entirely (so it disappears from sidebar)."""
+        sessions._load()
         if name not in sessions._sessions:
             raise HTTPException(404, f"no session named {name!r}")
         sessions._sessions.pop(name)
