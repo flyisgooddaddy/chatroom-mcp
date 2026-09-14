@@ -155,7 +155,8 @@ async function loadInitial() {
       fetch('/api/messages?limit=200').then(r => r.json()),
       fetch('/api/sessions').then(r => r.json()),
     ]);
-    messages = m.messages || [];
+    mergeSnapshot(m.messages || []);
+    sessions = new Map();
     for (const sess of s.sessions || []) sessions.set(sess.name, sess);
     renderMessages();
     updateStatus();
@@ -239,7 +240,10 @@ async function pollOnce() {
     const sdata = await sr.json();
     const nextSessions = new Map();
     for (const s of sdata.sessions || []) nextSessions.set(s.name, s);
-    if (nextSessions.size !== sessions.size) {
+    const changed =
+      nextSessions.size !== sessions.size ||
+      [...nextSessions.keys()].some((k) => !sessions.has(k));
+    if (changed) {
       sessions = nextSessions;
       updateStatus();
     }
