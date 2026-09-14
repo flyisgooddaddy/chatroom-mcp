@@ -33,7 +33,7 @@ class Store:
         if not self.messages_path.exists():
             self.messages_path.touch()
 
-    def _next_id(self) -> int:
+    def _scan_max_id(self) -> int:
         last = 0
         with self.messages_path.open(encoding="utf-8") as f:
             for line in f:
@@ -47,11 +47,54 @@ class Store:
                 m = _ID_RE.match(str(obj.get("id", "")))
                 if m:
                     last = max(last, int(m.group(1)))
-        return last + 1
+        return last
+
+    # -- persistent, monotonically-increasing message id -----------------------
+    # Clear/rotation empties messages.jsonl but ids must keep growing, otherwise
+    # any agent doing incremental pull via `after`/`since` goes deaf after Clear.
+    # The counter lives in <comms_dir>/_id_seq.json and is ONLY reset when that
+    # file is explicitly deleted (an intentional, user-initiated reset).
+
+    def _id_seq_path(self) -> Path:
+        return self.comms_dir / "_id_seq.json"
+
+    def _read_seq(self) -> int:
+        p = self._id_seq_path()
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            return int(d.get("rooms", {}).get(self.room, 0))
+        except (OSError, ValueError, TypeError):
+            return 0
+
+    def _write_seq(self, value: int) -> None:
+        p = self._id_seq_path()
+        d: dict[str, Any] = {}
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            d = {}
+        if not isinstance(d, dict):
+            d = {}
+        rooms = d.get("rooms")
+        if not isinstance(rooms, dict):
+            rooms = {}
+        rooms[self.room] = value
+        d["rooms"] = rooms
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(p)
+
+    def _next_id(self) -> int:
+        seq = self._read_seq()
+        if seq <= 0:
+            seq = self._scan_max_id()  # migrate from an existing non-empty file
+        return seq + 1
 
     def append(self, msg: dict[str, Any]) -> dict[str, Any]:
         if "id" not in msg:
-            msg["id"] = f"msg-{self._next_id():04d}"
+            new_id = self._next_id()
+            msg["id"] = f"msg-{new_id:04d}"
+            self._write_seq(new_id)  # persist the monotonic counter
         if "timestamp" not in msg:
             msg["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         ok, reason = is_well_formed(msg)

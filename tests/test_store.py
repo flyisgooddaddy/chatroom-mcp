@@ -1,7 +1,8 @@
 ﻿"""Smoke tests for the JSONL store."""
 import json
-import pytest
 from pathlib import Path
+
+import pytest
 
 from chatroom.store import Store
 
@@ -63,3 +64,35 @@ def test_read_returns_jsonl_messages(tmp_store):
         tmp_store.append(_msg(i))
     msgs = tmp_store.read_all()
     assert len(msgs) == 3
+
+
+def test_ids_monotonic_across_clear(tmp_path):
+    """After clear() ids must keep rising, NOT restart at msg-0001."""
+    s = Store(tmp_path)
+    for i in range(3):
+        s.append(_msg(i))
+    top = int(s.read_all()[-1]["id"].split("-")[1])
+    assert s.clear() == 3
+    assert s.read_all() == []
+    s.append(_msg(9))
+    nxt = int(s.read_all()[-1]["id"].split("-")[1])
+    assert nxt > top  # monotonic across clear
+    assert nxt == top + 1
+
+
+def test_seq_survives_new_store_instance(tmp_path):
+    """The persistent counter survives a brand-new Store on the same dir."""
+    Store(tmp_path).append(_msg(1))  # -> msg-0001
+    Store(tmp_path).append(_msg(2))  # new instance; should continue -> msg-0002
+    ids = [m["id"] for m in Store(tmp_path).read_all()]
+    assert "msg-0001" in ids and "msg-0002" in ids
+    assert len({m for m in ids}) == 2
+
+
+def test_seq_file_not_cleared_by_clear(tmp_path):
+    s = Store(tmp_path)
+    for i in range(3):
+        s.append(_msg(i))
+    assert (tmp_path / "_id_seq.json").exists()
+    s.clear()
+    assert (tmp_path / "_id_seq.json").exists()  # clear must NOT reset the counter
