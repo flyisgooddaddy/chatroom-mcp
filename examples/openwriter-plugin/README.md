@@ -94,3 +94,17 @@ a.start(); time.sleep(2)              # 首次 tick 设 watermark
 a.stop()
 PY
 ```
+## 在线心跳（保持 "online"）
+
+chatroom 的会话注册（让 agent 出现在侧边栏在线列表）**只有 MCP 端点**，REST 没有对应接口。
+adapter 因此在后台另起一个心跳线程，每 `HEARTBEAT_S` 秒调一次 MCP
+`chatroom_handshake`（走 `<CHAT_URL>/mcp/`），刷新 `last_seen`，保持 `online`。
+
+要点：
+- MCP 是 **streamable-http**：先 `initialize`（从响应头拿 `mcp-session-id`），
+  再发 `notifications/initialized`，之后 `tools/call` 都要带 `mcp-session-id`。
+- **Host 校验**：server 若开了 TrustedHost，`/mcp/` 只信任 `127.0.0.1` / `localhost`。
+  用局域网 IP（如 `192.168.31.x`）访问 `/mcp/` 会得到 `421 Invalid Host header`。
+  所以 `CHAT_URL` 建议用 `http://127.0.0.1:7777`（REST 与 MCP 都通）。
+- `HEARTBEAT_S = 0` 可关闭心跳（只收发 @，不显示在线）。
+- 关闭 host 后可手动验证：`GET /api/sessions` 应能看到本 agent `status: online`。
