@@ -88,6 +88,30 @@
     border-radius: 4px; padding: 3px 6px; font: inherit; cursor: pointer;
   }
   #search-box { flex: 0 1 220px; }
+  .bind-btn { background: transparent; color: var(--muted); border: 0; cursor: pointer; padding: 2px 5px; font-size: 10px; }
+  .bind-btn:hover { color: var(--accent); }
+  /* Session binding modal */
+  #bind-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    display: none; align-items: center; justify-content: center; z-index: 200;
+  }
+  #bind-modal.open { display: flex; }
+  #bind-box {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    width: 440px; max-width: 90vw; max-height: 70vh; overflow-y: auto; padding: 16px;
+  }
+  #bind-box h3 { font-size: 13px; margin-bottom: 12px; }
+  #bind-box .host-sess { padding: 8px; border: 1px solid var(--border); border-radius: 4px; margin-bottom: 6px; cursor: pointer; }
+  #bind-box .host-sess:hover { background: var(--hover); }
+  #bind-box .host-sess.bound { border-color: var(--accent); }
+  #bind-box .host-sess .htitle { font-weight: 600; }
+  #bind-box .host-sess .hdir { font-size: 10px; color: var(--muted); }
+  #bind-box .row { display: flex; gap: 8px; margin-top: 12px; }
+  #bind-box .row button { flex: 1; }
+  #bind-box .btn { background: var(--accent); color: #000; border: 0; padding: 6px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px; }
+  #bind-box .btn.sec { background: var(--hover); color: var(--text); border: 1px solid var(--border); }
+  #bind-box .hint { font-size: 10px; color: var(--muted); margin-top: 8px; }
+  #bind-box .empty { color: var(--muted); font-size: 11px; font-style: italic; padding: 8px; }
 </style>
 <link rel="icon" href="data:,">
 </head>
@@ -125,6 +149,18 @@
       <button id="send-btn" type="submit">Send</button>
     </form>
   </main>
+</div>
+<div id="bind-modal">
+  <div id="bind-box">
+    <h3 id="bind-title">Bind session</h3>
+    <div id="bind-sessions"></div>
+    <div class="row">
+      <button class="btn sec" id="bind-create">+ New session</button>
+      <button class="btn sec" id="bind-auto">Auto (newest)</button>
+      <button class="btn sec" id="bind-close">Close</button>
+    </div>
+    <div class="hint">Pick the opencode session that @-mentions will be injected into.</div>
+  </div>
 </div>
 <script>
 const SENDER_COLORS = { workbuddy: 'sender-workbuddy', opencode: 'sender-opencode', human: 'sender-human', bobo: 'sender-bobo' };
@@ -188,11 +224,16 @@ function renderAgents() {
     const nameSpan = document.createElement('span');
     nameSpan.className = 'agent-name';
     nameSpan.textContent = name;
+    const bind = document.createElement('button');
+    bind.className = 'bind-btn';
+    bind.textContent = 'bind';
+    bind.title = 'bind/unbind host session';
+    bind.onclick = () => openBindModal(name);
     const kick = document.createElement('button');
     kick.className = 'kick-btn';
     kick.textContent = 'kick';
     kick.onclick = () => kickAgent(name);
-    div.appendChild(dot); div.appendChild(nameSpan); div.appendChild(kick);
+    div.appendChild(dot); div.appendChild(nameSpan); div.appendChild(bind); div.appendChild(kick);
     el.appendChild(div);
   }
 }
@@ -346,6 +387,56 @@ async function kickAgent(name) {
   } catch (e) { alert('kick error: ' + e); }
 }
 
+// ---- session binding (user decides which host session receives @) ----
+let bindAgentName = null;
+
+function openBindModal(name) {
+  bindAgentName = name;
+  const sess = sessions.get(name) || {};
+  const host = sess.host_sessions || [];
+  const bound = sess.bound_session_id || null;
+  $('bind-title').textContent = 'Bind session — ' + name;
+  const box = $('bind-sessions');
+  box.innerHTML = '';
+  if (!host.length) {
+    box.innerHTML = '<div class="empty">No host sessions reported.<br>Waiting for the adapter to report them...</div>';
+  } else {
+    for (const s of host) {
+      const div = document.createElement('div');
+      div.className = 'host-sess' + (s.id === bound ? ' bound' : '');
+      const t = document.createElement('div'); t.className = 'htitle';
+      t.textContent = s.title || s.id;
+      const d = document.createElement('div'); d.className = 'hdir';
+      d.textContent = (s.directory || '') + (s.id === bound ? '  (current)' : '');
+      div.appendChild(t); div.appendChild(d);
+      div.onclick = () => bindSession(name, s.id);
+      box.appendChild(div);
+    }
+  }
+  $('bind-modal').classList.add('open');
+}
+
+function closeBindModal() { $('bind-modal').classList.remove('open'); bindAgentName = null; }
+
+async function sendBindCommand(name, op, sessionId) {
+  try {
+    const body = { op };
+    if (sessionId) body.session_id = sessionId;
+    const r = await fetch('/api/agent/' + encodeURIComponent(name) + '/bind', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('command failed: ' + (err.detail || r.statusText)); return; }
+    const sess = await r.json();
+    sessions.set(name, sess); updateStatus();
+    $('ws-text').textContent = op + ' command queued';
+  } catch (e) { alert('command error: ' + e); }
+}
+
+function bindSession(name, sessionId) { sendBindCommand(name, 'bind', sessionId); }
+function createAndBind(name) { sendBindCommand(name, 'create'); }
+function unbindSession(name) { sendBindCommand(name, 'unbind'); }
+
 function addMessage(m) { if (!m || !m.id || seenIds.has(m.id)) return false; seenIds.add(m.id); messages.push(m); return true; }
 function mergeInto(list) {
   // reload from a room switch: rebuild the local list from the room snapshot
@@ -389,6 +480,7 @@ function handleEvent(evt) {
     if (evt.message.room && evt.message.room !== currentRoom) return;
     if (addMessage(evt.message)) { messages.sort((a,b)=>String(a.id).localeCompare(String(b.id))); renderMessages(); updateStatus(); }
   } else if (evt.kind === 'session_joined') { sessions.set(evt.session.name, evt.session); updateStatus(); }
+  else if (evt.kind === 'session_updated') { sessions.set(evt.session.name, evt.session); updateStatus(); if (bindAgentName === evt.session.name) openBindModal(evt.session.name); }
   else if (evt.kind === 'session_removed') { sessions.delete(evt.name); updateStatus(); }
 }
 
@@ -488,6 +580,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const _clearBtn = document.getElementById('clear-btn');
   if (_clearBtn) _clearBtn.addEventListener('click', clearMessages);
+  $('bind-create').addEventListener('click', () => { if (bindAgentName) createAndBind(bindAgentName); });
+  $('bind-auto').addEventListener('click', () => { if (bindAgentName) unbindSession(bindAgentName); });
+  $('bind-close').addEventListener('click', closeBindModal);
+  $('bind-modal').addEventListener('click', (e) => { if (e.target.id === 'bind-modal') closeBindModal(); });
   $('refresh-btn').addEventListener('click', async () => { await loadInitial(); $('ws-text').textContent = 'refreshed'; });
   $('theme-btn').addEventListener('click', () => {
     const cur = document.documentElement.dataset.theme;

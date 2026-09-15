@@ -12,8 +12,13 @@ Serves:
   GET  /api/sessions         JSON list of sessions
   POST /api/post             Post a message from the GUI (room-aware)
   DELETE /api/sessions/{name}  Kick a session
+  POST /api/agent/{name}/host          Adapter reports selectable host sessions
+  POST /api/agent/{name}/bind          User queues bind|create|unbind command
+  GET  /api/agent/{name}/commands       Adapter polls pending binding commands
+  POST /api/agent/{name}/commands/ack   Adapter confirms it handled the command
   WS   /ws                   WebSocket: broadcasts new messages + session events
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +32,7 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from chatroom.hub import hub
 from chatroom.sessions import SessionRegistry
@@ -66,6 +72,7 @@ async def _notify_and_broadcast(stored: dict[str, Any], sessions) -> None:
         if sess and sess.callback_url:
             try:
                 from chatroom.push import notify
+
                 await notify(sess.callback_url, {"event": "chatroom_message", "message": stored})
             except Exception:
                 pass
@@ -87,6 +94,13 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
         # Serve the streamable-HTTP endpoint at the app root so that mounting this
         # app under /mcp yields the documented endpoint at /mcp/ (not /mcp/mcp).
         streamable_http_path="/",
+        # LAN / cross-machine: FastMCP auto-enables DNS-rebinding protection when
+        # host is 127.0.0.1/localhost, which whitelists only those hosts and makes
+        # the MCP endpoint return 421 "Invalid Host header" for any LAN IP.
+        # We run on 0.0.0.0 for LAN access, so disable the host allowlist here.
+        # (Safer alternative: keep it on and whitelist your LAN IP, e.g.
+        #  allowed_hosts=["127.0.0.1:*","localhost:*","[::1]:*","192.168.31.201:*"].)
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         instructions=(
             "A shared chatroom for AI agents and humans. "
             "Use chatroom_handshake to register, chatroom_pull to fetch, "
@@ -101,16 +115,22 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
         await hub.broadcast({"kind": "session_joined", "session": sess.to_dict()})
         return sess.to_dict()
 
-    @mcp.tool(name=TOOL_PULL, description="Pull messages newer than `since`. Empty/null for all. Room-aware.")
+    @mcp.tool(
+        name=TOOL_PULL,
+        description="Pull messages newer than `since`. Empty/null for all. Room-aware.",
+    )
     def pull(since: str | None = None, limit: int = 50, room: str = DEFAULT_ROOM) -> dict[str, Any]:
         store = _store_for(stores, room)
         if since:
             out = store.messages_after(since)
         else:
             out = list(store.iter_all())
-        return {"messages": out[-max(1, min(limit, 1000)):]}
+        return {"messages": out[-max(1, min(limit, 1000)) :]}
 
-    @mcp.tool(name=TOOL_POST, description="Post a new message to a room. Pushes to @-target agent if registered.")
+    @mcp.tool(
+        name=TOOL_POST,
+        description="Post a new message to a room. Pushes to @-target agent if registered.",
+    )
     async def post(msg: dict[str, Any], room: str = DEFAULT_ROOM) -> dict[str, Any]:
         store = _store_for(stores, room)
         msg.setdefault("room", _store_for(stores, room).room)
@@ -121,7 +141,10 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
         await _notify_and_broadcast(stored, sessions)
         return stored
 
-    @mcp.tool(name=TOOL_HISTORY, description="Return the most recent N messages (default 50, max 1000). Room-aware.")
+    @mcp.tool(
+        name=TOOL_HISTORY,
+        description="Return the most recent N messages (default 50, max 1000). Room-aware.",
+    )
     def history(limit: int = 50, room: str = DEFAULT_ROOM) -> dict[str, Any]:
         limit = max(1, min(limit, 1000))
         store = _store_for(stores, room)
@@ -131,7 +154,10 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
     def list_sessions() -> dict[str, Any]:
         return {"sessions": [s.to_dict() for s in sessions.all()]}
 
-    @mcp.tool(name=TOOL_SEARCH, description="Full-text search over messages. field in {subject,body,from,type,id}.")
+    @mcp.tool(
+        name=TOOL_SEARCH,
+        description="Full-text search over messages. field in {subject,body,from,type,id}.",
+    )
     def search(query: str, field: str | None = None, room: str = DEFAULT_ROOM) -> dict[str, Any]:
         store = _store_for(stores, room)
         return {"messages": store.search(query, field)}
@@ -140,9 +166,12 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
     def rooms() -> dict[str, Any]:
         return {"rooms": list(stores.keys())}
 
-    @mcp.resource(uri=RESOURCE_MESSAGES, name="chatroom messages",
-                  description="All messages as NDJSON.",
-                  mime_type="application/x-ndjson")
+    @mcp.resource(
+        uri=RESOURCE_MESSAGES,
+        name="chatroom messages",
+        description="All messages as NDJSON.",
+        mime_type="application/x-ndjson",
+    )
     def messages_resource() -> str:
         lines = []
         for store in stores.values():
@@ -197,9 +226,12 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
         return {"rooms": room_names}
 
     @app.get("/api/messages")
-    async def api_messages(room: str = DEFAULT_ROOM, limit: int = 200,
-                           after: str | None = None,
-                           before: str | None = None) -> dict[str, Any]:
+    async def api_messages(
+        room: str = DEFAULT_ROOM,
+        limit: int = 200,
+        after: str | None = None,
+        before: str | None = None,
+    ) -> dict[str, Any]:
         store = _store_for(stores, room)
         msgs = store.messages_after(after) if after else store.read_all()
         if before:
@@ -228,8 +260,9 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
         return {"cleared": n, "room": store.room}
 
     @app.get("/api/messages/poll")
-    async def api_long_poll(room: str = DEFAULT_ROOM, after: str | None = None,
-                            timeout: float = 15.0) -> dict[str, Any]:
+    async def api_long_poll(
+        room: str = DEFAULT_ROOM, after: str | None = None, timeout: float = 15.0
+    ) -> dict[str, Any]:
         """Long-poll: return immediately if new messages exist, else wait up to `timeout`."""
         store = _store_for(stores, room)
         now = store.messages_after(after)
@@ -255,9 +288,9 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
         return {"messages": store.messages_after(after)}
 
     @app.get("/api/search")
-    async def api_search(q: str = Query(..., min_length=1),
-                         field: str | None = None,
-                         room: str = DEFAULT_ROOM) -> dict[str, Any]:
+    async def api_search(
+        q: str = Query(..., min_length=1), field: str | None = None, room: str = DEFAULT_ROOM
+    ) -> dict[str, Any]:
         store = _store_for(stores, room)
         return {"messages": store.search(q, field)}
 
@@ -319,6 +352,65 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
         await hub.broadcast({"kind": "session_removed", "name": name})
         return {"removed": name}
 
+    # --- session binding protocol (the user decides which host session gets @) ---
+
+    def _ensure_session(name: str):
+        """Binding endpoints auto-register on first contact (acts as a REST
+        handshake), so an adapter that only reports host conversations still
+        shows up in the sidebar."""
+        sessions._load()
+        if name not in sessions._sessions:
+            sessions.handshake(name)
+        return sessions._sessions[name]
+
+    @app.post("/api/agent/{name}/host")
+    async def api_agent_report_host(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Agent adapter reports its selectable host conversations + current binding."""
+        _ensure_session(name)
+        sess = sessions.report_host(
+            name,
+            host_sessions=payload.get("host_sessions") or [],
+            bound_session_id=payload.get("bound_session_id"),
+        )
+        await hub.broadcast({"kind": "session_updated", "session": sess.to_dict()})
+        return sess.to_dict()
+
+    @app.post("/api/agent/{name}/bind")
+    async def api_agent_bind(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """User queues a binding command: {op: bind|create|unbind, session_id?, directory?}."""
+        op = str(payload.get("op") or "bind")
+        if op not in ("bind", "create", "unbind"):
+            raise HTTPException(400, f"invalid op {op!r}")
+        _ensure_session(name)
+        sess = sessions.set_pending(
+            name,
+            op,
+            session_id=payload.get("session_id"),
+            directory=payload.get("directory"),
+        )
+        await hub.broadcast({"kind": "session_updated", "session": sess.to_dict()})
+        return sess.to_dict()
+
+    @app.get("/api/agent/{name}/commands")
+    async def api_agent_commands(name: str) -> dict[str, Any]:
+        """Agent adapter polls this for pending binding commands."""
+        _ensure_session(name)
+        sess = sessions.get(name)
+        cmd = sess.pending_command if sess is not None else None
+        return {"commands": [cmd] if cmd else []}
+
+    @app.post("/api/agent/{name}/commands/ack")
+    async def api_agent_commands_ack(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Agent adapter confirms it handled the pending command."""
+        _ensure_session(name)
+        sess = sessions.ack_pending(
+            name,
+            bound_session_id=payload.get("bound_session_id"),
+            host_sessions=payload.get("host_sessions"),
+        )
+        await hub.broadcast({"kind": "session_updated", "session": sess.to_dict()})
+        return sess.to_dict()
+
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket):
         await hub.connect(websocket)
@@ -358,14 +450,20 @@ create_server = create_app
 
 def main() -> None:
     import argparse
+
     p = argparse.ArgumentParser(description="Run chatroom-mcp server + Web GUI.")
     p.add_argument("--comms-dir", type=Path, required=True)
-    p.add_argument("--rooms", nargs="*", default=None,
-                   help="room names (default: main). Multi-room via e.g. --rooms main ops research")
+    p.add_argument(
+        "--rooms",
+        nargs="*",
+        default=None,
+        help="room names (default: main). Multi-room via e.g. --rooms main ops research",
+    )
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=7777)
     a = p.parse_args()
     import uvicorn
+
     uvicorn.run(create_app(a.comms_dir, a.rooms), host=a.host, port=a.port, log_level="info")
 
 
