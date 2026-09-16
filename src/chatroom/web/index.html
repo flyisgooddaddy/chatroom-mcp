@@ -30,6 +30,13 @@
   .agent-status { font-size: 10px; color: var(--muted); }
   .kick-btn { background: transparent; color: var(--muted); border: 0; cursor: pointer; padding: 2px 6px; font-size: 11px; }
   .kick-btn:hover { color: var(--red); }
+  .host-list { padding: 0 8px 6px 24px; font-size: 11px; color: var(--muted); }
+  .host-row { display: flex; align-items: center; padding: 3px 4px; border-radius: 3px; gap: 6px; }
+  .host-row:hover { background: var(--hover); }
+  .host-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .host-sid { font-family: monospace; color: var(--muted); font-size: 10px; }
+  .kick-host-btn { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 10px; padding: 1px 4px; }
+  .kick-host-btn:hover { color: var(--red); }
   /* Main */
   #main { display: flex; flex-direction: column; min-height: 0; height: 100vh; overflow: hidden; }
   #status { padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
@@ -88,30 +95,6 @@
     border-radius: 4px; padding: 3px 6px; font: inherit; cursor: pointer;
   }
   #search-box { flex: 0 1 220px; }
-  .bind-btn { background: transparent; color: var(--muted); border: 0; cursor: pointer; padding: 2px 5px; font-size: 10px; }
-  .bind-btn:hover { color: var(--accent); }
-  /* Session binding modal */
-  #bind-modal {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
-    display: none; align-items: center; justify-content: center; z-index: 200;
-  }
-  #bind-modal.open { display: flex; }
-  #bind-box {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
-    width: 440px; max-width: 90vw; max-height: 70vh; overflow-y: auto; padding: 16px;
-  }
-  #bind-box h3 { font-size: 13px; margin-bottom: 12px; }
-  #bind-box .host-sess { padding: 8px; border: 1px solid var(--border); border-radius: 4px; margin-bottom: 6px; cursor: pointer; }
-  #bind-box .host-sess:hover { background: var(--hover); }
-  #bind-box .host-sess.bound { border-color: var(--accent); }
-  #bind-box .host-sess .htitle { font-weight: 600; }
-  #bind-box .host-sess .hdir { font-size: 10px; color: var(--muted); }
-  #bind-box .row { display: flex; gap: 8px; margin-top: 12px; }
-  #bind-box .row button { flex: 1; }
-  #bind-box .btn { background: var(--accent); color: #000; border: 0; padding: 6px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 12px; }
-  #bind-box .btn.sec { background: var(--hover); color: var(--text); border: 1px solid var(--border); }
-  #bind-box .hint { font-size: 10px; color: var(--muted); margin-top: 8px; }
-  #bind-box .empty { color: var(--muted); font-size: 11px; font-style: italic; padding: 8px; }
 </style>
 <link rel="icon" href="data:,">
 </head>
@@ -150,23 +133,11 @@
     </form>
   </main>
 </div>
-<div id="bind-modal">
-  <div id="bind-box">
-    <h3 id="bind-title">Bind session</h3>
-    <div id="bind-sessions"></div>
-    <div class="row">
-      <button class="btn sec" id="bind-create">+ New session</button>
-      <button class="btn sec" id="bind-auto">Auto (newest)</button>
-      <button class="btn sec" id="bind-close">Close</button>
-    </div>
-    <div class="hint">Pick the opencode session that @-mentions will be injected into.</div>
-  </div>
-</div>
 <script>
 const SENDER_COLORS = { workbuddy: 'sender-workbuddy', opencode: 'sender-opencode', human: 'sender-human', bobo: 'sender-bobo' };
 let messages = [];
 let seenIds = new Set();
-let sessions = new Map();
+let agents = new Map();
 let rooms = [];
 let currentRoom = 'main';
 let searchQuery = '';
@@ -212,29 +183,54 @@ function renderBody(m) {
 function renderAgents() {
   const el = $('agents');
   el.innerHTML = '';
-  if (sessions.size === 0) {
+  if (agents.size === 0) {
     el.innerHTML = '<div class="empty" style="font-size:11px">No agents connected.<br>Waiting for handshake...</div>';
     return;
   }
-  for (const [name, sess] of sessions) {
+  for (const [name, agent] of agents) {
+    const hosts = agent.hosts || [];
+    const liveCount = hosts.filter(h => h.status === 'online').length;
     const div = document.createElement('div');
     div.className = 'agent';
     const dot = document.createElement('span');
-    dot.className = 'dot ' + (sess.status === 'online' ? 'online' : 'offline');
+    dot.className = 'dot ' + (liveCount > 0 ? 'online' : 'offline');
     const nameSpan = document.createElement('span');
     nameSpan.className = 'agent-name';
     nameSpan.textContent = name;
-    const bind = document.createElement('button');
-    bind.className = 'bind-btn';
-    bind.textContent = 'bind';
-    bind.title = 'bind/unbind host session';
-    bind.onclick = () => openBindModal(name);
+    const agentStatus = document.createElement('span');
+    agentStatus.className = 'agent-status';
+    agentStatus.textContent = hosts.length ? (liveCount + '/' + hosts.length + ' live') : 'no hosts';
     const kick = document.createElement('button');
     kick.className = 'kick-btn';
-    kick.textContent = 'kick';
+    kick.textContent = 'kick all';
     kick.onclick = () => kickAgent(name);
-    div.appendChild(dot); div.appendChild(nameSpan); div.appendChild(bind); div.appendChild(kick);
+    div.appendChild(dot); div.appendChild(nameSpan); div.appendChild(agentStatus);
+    div.appendChild(kick);
     el.appendChild(div);
+    if (hosts.length) {
+      const hl = document.createElement('div');
+      hl.className = 'host-list';
+      for (const h of hosts) {
+        const row = document.createElement('div');
+        row.className = 'host-row';
+        const label = document.createElement('span');
+        label.className = 'host-name';
+        label.textContent = h.session_name || (h.sid || '').slice(0, 8) || '(no sid)';
+        label.title = h.sid || '';
+        const sidEl = document.createElement('span');
+        sidEl.className = 'host-sid';
+        sidEl.textContent = (h.sid || '').slice(0, 8);
+        const kickH = document.createElement('button');
+        kickH.className = 'kick-host-btn';
+        kickH.textContent = 'kick';
+        kickH.onclick = () => kickHost(name, h.sid);
+        row.appendChild(label);
+        row.appendChild(sidEl);
+        row.appendChild(kickH);
+        hl.appendChild(row);
+      }
+      el.appendChild(hl);
+    }
   }
 }
 
@@ -336,7 +332,7 @@ async function loadOlder() {
 }
 
 function updateStatus() {
-  $('agent-count').textContent = sessions.size + ' agent' + (sessions.size === 1 ? '' : 's');
+$('agent-count').textContent = agents.size + ' agent' + (agents.size === 1 ? '' : 's');
   $('msg-count').textContent = messages.length + ' message' + (messages.length === 1 ? '' : 's');
   renderAgents(); renderRoomList();
 }
@@ -356,8 +352,8 @@ async function loadInitial() {
       fetch('/api/sessions').then(r => r.json()),
     ]);
     mergeInto(m.messages || []);
-    sessions = new Map();
-    for (const sess of s.sessions || []) sessions.set(sess.name, sess);
+    agents = new Map();
+    for (const sess of s.agents || []) agents.set(sess.name, sess);
     renderMessages(); updateStatus();
   } catch (e) { console.error('initial load failed', e); }
 }
@@ -380,62 +376,22 @@ async function postMessage(text) {
 }
 
 async function kickAgent(name) {
-  if (!confirm('Kick agent "' + name + '"? They will be removed from this chatroom until they handshake again.')) return;
+  if (!confirm('Unregister agent "' + name + '" and ALL its hosts? It will be removed from the sidebar (its next heartbeat may re-register it).')) return;
   try {
     const r = await fetch('/api/sessions/' + encodeURIComponent(name), { method: 'DELETE' });
-    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('kick failed: ' + (err.detail || r.statusText)); }
+    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('kick failed: ' + (err.detail || r.statusText)); return; }
+    agents.delete(name); updateStatus();
+    $('ws-text').textContent = name + ' removed';
   } catch (e) { alert('kick error: ' + e); }
 }
 
-// ---- session binding (user decides which host session receives @) ----
-let bindAgentName = null;
-
-function openBindModal(name) {
-  bindAgentName = name;
-  const sess = sessions.get(name) || {};
-  const host = sess.host_sessions || [];
-  const bound = sess.bound_session_id || null;
-  $('bind-title').textContent = 'Bind session — ' + name;
-  const box = $('bind-sessions');
-  box.innerHTML = '';
-  if (!host.length) {
-    box.innerHTML = '<div class="empty">No host sessions reported.<br>Waiting for the adapter to report them...</div>';
-  } else {
-    for (const s of host) {
-      const div = document.createElement('div');
-      div.className = 'host-sess' + (s.id === bound ? ' bound' : '');
-      const t = document.createElement('div'); t.className = 'htitle';
-      t.textContent = s.title || s.id;
-      const d = document.createElement('div'); d.className = 'hdir';
-      d.textContent = (s.directory || '') + (s.id === bound ? '  (current)' : '');
-      div.appendChild(t); div.appendChild(d);
-      div.onclick = () => bindSession(name, s.id);
-      box.appendChild(div);
-    }
-  }
-  $('bind-modal').classList.add('open');
-}
-
-function closeBindModal() { $('bind-modal').classList.remove('open'); bindAgentName = null; }
-
-async function sendBindCommand(name, op, sessionId) {
+async function kickHost(name, sid) {
+  if (!confirm('Remove host ' + sid.slice(0, 12) + '… from agent "' + name + '"?')) return;
   try {
-    const body = { op };
-    if (sessionId) body.session_id = sessionId;
-    const r = await fetch('/api/agent/' + encodeURIComponent(name) + '/bind', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('command failed: ' + (err.detail || r.statusText)); return; }
-    const sess = await r.json();
-    sessions.set(name, sess); updateStatus();
-    $('ws-text').textContent = op + ' command queued';
-  } catch (e) { alert('command error: ' + e); }
+    const r = await fetch('/api/agents/' + encodeURIComponent(name) + '/hosts/' + encodeURIComponent(sid), { method: 'DELETE' });
+    if (!r.ok) { const err = await r.json().catch(() => ({})); alert('kick host failed: ' + (err.detail || r.statusText)); return; }
+  } catch (e) { alert('kick host error: ' + e); }
 }
-
-function bindSession(name, sessionId) { sendBindCommand(name, 'bind', sessionId); }
-function createAndBind(name) { sendBindCommand(name, 'create'); }
-function unbindSession(name) { sendBindCommand(name, 'unbind'); }
 
 function addMessage(m) { if (!m || !m.id || seenIds.has(m.id)) return false; seenIds.add(m.id); messages.push(m); return true; }
 function mergeInto(list) {
@@ -473,15 +429,20 @@ function handleEvent(evt) {
       if (currentRoom !== mroom) continue;
       if (addMessage(m)) { messages.sort((a,b)=>String(a.id).localeCompare(String(b.id))); }
     }
-    sessions = new Map();
-    for (const s of evt.sessions || []) sessions.set(s.name, s);
+    agents = new Map();
+    for (const a of evt.agents || []) agents.set(a.name, a);
     renderMessages(); updateStatus();
   } else if (evt.kind === 'message') {
     if (evt.message.room && evt.message.room !== currentRoom) return;
     if (addMessage(evt.message)) { messages.sort((a,b)=>String(a.id).localeCompare(String(b.id))); renderMessages(); updateStatus(); }
-  } else if (evt.kind === 'session_joined') { sessions.set(evt.session.name, evt.session); updateStatus(); }
-  else if (evt.kind === 'session_updated') { sessions.set(evt.session.name, evt.session); updateStatus(); if (bindAgentName === evt.session.name) openBindModal(evt.session.name); }
-  else if (evt.kind === 'session_removed') { sessions.delete(evt.name); updateStatus(); }
+  } else if (evt.kind === 'agent_joined') { agents.set(evt.agent.name, evt.agent); updateStatus(); }
+  else if (evt.kind === 'agent_removed') { agents.delete(evt.name); updateStatus(); }
+  else if (evt.kind === 'host_removed') {
+    const a = agents.get(evt.agent);
+    if (a) { a.hosts = (a.hosts || []).filter(h => h.sid !== evt.sid); updateStatus(); }
+  } else if (evt.kind === 'active_changed') {
+    if (evt.agent) agents.set(evt.agent.name, evt.agent); updateStatus();
+  }
 }
 
 function connectSSE() {
@@ -525,21 +486,30 @@ function openMention(query) {
   const inf = getMentionQuery();
   if (inf === null) { closeMention(); return; }
   const q = (query ?? inf.query).toLowerCase();
-  const names = [...sessions.keys()].sort();
-  mentionMatches = names.filter((n) => n.toLowerCase().includes(q));
+  // Suggest only each host's session_name (labelled with its parent agent) —
+  // @ targets a session, not the abstract agent group.
+  const suggestions = [];
+  for (const a of agents.values()) {
+    if (!a.hosts) continue;
+    for (const h of a.hosts) {
+      if (!h.session_name) continue;
+      suggestions.push({ text: h.session_name, label: a.name, on: 'host' });
+    }
+  }
+  suggestions.sort((x, y) => x.text.localeCompare(y.text));
+  mentionMatches = suggestions.filter((s) => s.text.toLowerCase().includes(q));
   const box = mentionBox();
   box.innerHTML = '';
-  if (mentionMatches.length === 0) { box.innerHTML = '<div class="empty">No agents connected.</div>'; box.classList.add('open'); mentionOpen = true; return; }
+  if (mentionMatches.length === 0) { box.innerHTML = '<div class="empty">No sessions connected.</div>'; box.classList.add('open'); mentionOpen = true; return; }
   mentionIndex = Math.min(mentionIndex, mentionMatches.length - 1);
-  mentionMatches.forEach((name, i) => {
-    const sess = sessions.get(name) || {};
+  mentionMatches.forEach((s, i) => {
     const item = document.createElement('div');
     item.className = 'item' + (i === mentionIndex ? ' active' : '');
-    const dot = document.createElement('span'); dot.className = 'dot ' + (sess.status === 'online' ? 'online' : 'offline');
-    const nm = document.createElement('span'); nm.className = 'mname'; nm.textContent = name;
-    const st = document.createElement('span'); st.className = 'mstatus'; st.textContent = sess.status || '';
+    const dot = document.createElement('span'); dot.className = 'dot online';
+    const nm = document.createElement('span'); nm.className = 'mname'; nm.textContent = s.text;
+    const st = document.createElement('span'); st.className = 'mstatus'; st.textContent = s.label;
     item.appendChild(dot); item.appendChild(nm); item.appendChild(st);
-    item.onmousedown = (e) => { e.preventDefault(); insertMention(name); };
+    item.onmousedown = (e) => { e.preventDefault(); insertMention(s.text); };
     box.appendChild(item);
   });
   box.classList.add('open'); mentionOpen = true;
@@ -573,17 +543,13 @@ document.addEventListener('DOMContentLoaded', () => {
       for (const m of data.messages || []) if (addMessage(m)) changed = true;
       if (changed) { messages.sort((a,b)=>String(a.id).localeCompare(String(b.id))); renderMessages(); updateStatus(); }
       const sr = await fetch('/api/sessions'); const sdata = await sr.json();
-      sessions = new Map(); for (const s of sdata.sessions || []) sessions.set(s.name, s);
-      renderAgents(); $('agent-count').textContent = sessions.size + ' agent' + (sessions.size === 1 ? '' : 's');
+      agents = new Map(); for (const s of sdata.agents || []) agents.set(s.name, s);
+      renderAgents(); $('agent-count').textContent = agents.size + ' agent' + (agents.size === 1 ? '' : 's');
     } catch (e) {}
   }, 2000);
 
   const _clearBtn = document.getElementById('clear-btn');
   if (_clearBtn) _clearBtn.addEventListener('click', clearMessages);
-  $('bind-create').addEventListener('click', () => { if (bindAgentName) createAndBind(bindAgentName); });
-  $('bind-auto').addEventListener('click', () => { if (bindAgentName) unbindSession(bindAgentName); });
-  $('bind-close').addEventListener('click', closeBindModal);
-  $('bind-modal').addEventListener('click', (e) => { if (e.target.id === 'bind-modal') closeBindModal(); });
   $('refresh-btn').addEventListener('click', async () => { await loadInitial(); $('ws-text').textContent = 'refreshed'; });
   $('theme-btn').addEventListener('click', () => {
     const cur = document.documentElement.dataset.theme;

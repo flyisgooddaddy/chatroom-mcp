@@ -18,7 +18,7 @@
 |---|---|
 | `chatroom/protocol.py` | Schema validator (compatible with `workbuddy-agent-comms` v2.1) |
 | `chatroom/store.py` | Append-only per-room JSONL store (`messages.jsonl` / `messages-<room>.jsonl`); assigns msg-NNNN ids; atomic via O_APPEND; full-text `search()` |
-| `chatroom/sessions.py` | Agent session registry; persisted to `_sessions.json`. Each `Session` also carries `bound_session_id` (host conversation @ targets), `host_sessions` (selectable conversations the adapter reports) and `pending_command` (queued bind/create/unbind) |
+| `chatroom/sessions.py` | Agent session registry; persisted to `_sessions.json`. A `Session` is a registered chatroom name bound to exactly one host session via `bound_session_id` (register contract). TTL + effective_status reflect offline. |
 | `chatroom/server.py` | MCP server (7 tools + 1 resource) over streamable-HTTP + REST/SSE/WS (room-aware) |
 | `chatroom/push.py` | Async HTTP callback to agents; fire-and-forget |
 | `chatroom/hub.py` | Broadcast hub: WebSocket clients + SSE `asyncio.Queue` subscribers |
@@ -38,11 +38,7 @@
 | `/api/rooms` | GET | list rooms |
 | `/api/sessions` | GET | list sessions |
 | `/api/post` | POST | post message (`room`) |
-| `/api/sessions/{name}` | DELETE | kick session |
-| `/api/agent/{name}/host` | POST | adapter reports selectable host sessions + binding (also a REST handshake) |
-| `/api/agent/{name}/bind` | POST | user queues `bind` / `create` / `unbind` |
-| `/api/agent/{name}/commands` | GET | adapter polls pending binding commands |
-| `/api/agent/{name}/commands/ack` | POST | adapter confirms it handled the command |
+| `/api/sessions/{name}` | DELETE | kick (unregister) a session |
 | `/ws` | WS | WebSocket broadcast + snapshot (also emits `session_updated`) |
 
 MCP tools: `chatroom_handshake`, `chatroom_pull`, `chatroom_post`
@@ -101,35 +97,22 @@ three transports via `chatroom/hub.py`.
 If the callback fails (timeout / 4xx / 5xx), server retries up to N times
 (default 1) and silently drops. Agents can always fall back to polling.
 
-## Session binding protocol (user decides which host session gets @)
+## Register contract & delivery (each chatroom name ↔ exactly one host session)
 
 The server stores messages and reliably replies (①④), but it cannot know *which
-host conversation carries the agent's context* — only the agent does (②). So the
-chatroom exposes a generic REST protocol that agents' adapters implement, and the
-**user** (not the agent) decides the binding:
+host conversation carries the agent's context* — only the agent does (②). So ② is
+pinned at **register time**: an adapter registers a chatroom `name` and reports
+the single host `bound_session_id` it maps to. `@name` is then delivered to that
+one host session via the host SDK (opencode: `client.session.prompt`, openwriter:
+`_emit(InboundMessage)`). This is what prevents a `@name` from broadcasting to
+other sessions.
 
-```
-        adapter (in host process)                     server
-        -------------------------                     ------
-  1.  POST /api/agent/{name}/host  ----------------->  registers session (auto-handshake)
-                                        host_sessions + bound_session_id
-  2.  user clicks "bind" in Web GUI                    POST /api/agent/{name}/bind
-                                                        -> Session.pending_command = {op, session_id}
-  3.  GET /api/agent/{name}/commands   <-------------  adapter polls for pending
-  4.  adapter executes op in-process:
-        bind   -> target host session = session_id
-        create -> host session.create(...) (fallback: newest in dir)
-        unbind -> clear binding (adapter auto-picks newest)
-  5.  POST /api/agent/{name}/commands/ack ---------->  confirms; server sets bound_session_id
-  6.  server broadcasts {kind:"session_updated"}        Web GUI refreshes the highlighted binding
-```
+The agent re-reports its *current* `bound_session_id` on every heartbeat. Because
+the chatroom trusts only the latest reported snapshot, a host session deleted on
+the agent's side is reflected on the next heartbeat — the chatroom never assumes a
+binding is valid forever, and never tries to introspect the host.
 
-`op` ∈ `{bind, create, unbind}`. `bind` carries `session_id`; `create` may carry
-`directory`/`title`. The adapter then posts `@`-mentions into `bound_session_id`
-via its host SDK (opencode: `client.session.prompt`, openwriter: `_emit(InboundMessage)`).
-
-Key invariant: the adapter is a **distributed artifact of the chatroom** (e.g.
-`examples/opencode-plugin/chatroom-bridge.ts`), and the binding protocol is a
-**chatroom protocol**; the host is only its execution environment. This keeps
-"each agent injects prompts differently" contained inside the adapter instead of
-leaking up to the user's operating layer.
+Key invariant: the adapter is a **distributed artifact of the chatroom**, and the
+register contract is a **chatroom protocol**; the host is only its execution
+environment. An agent that cannot report a `bound_session_id` (e.g. cannot inject a
+prompt at runtime) simply cannot register.

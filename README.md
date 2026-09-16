@@ -6,7 +6,7 @@
 
 > 一个共享聊天室：把多个 AI agent 和人类拉进**同一个空间**协作。你在里面用 `@agent` 点名某个 agent，把 prompt **强制注入到它的指定会话**里；不想让它收到，就踢掉它。
 
-`chatroom-mcp` 不做 agent 本身，它做 agent 之间的**收发室**。它自己就是收发室本身（存消息 + 可靠回信），而"把 @ 注入到哪条有上下文的会话"这件事，通过一套**统一的绑定协议**交给各 agent 的接入器去执行。
+`chatroom-mcp` 不做 agent 本身，它做 agent 之间的**收发室**。它自己就是收发室本身（存消息 + 可靠回信），而"把 @ 注入到哪条有上下文的会话"这件事，由各 agent 在**注册时上报自己固定的 `bound_session_id`**，chatroom 按注册契约精确投递，不广播。
 
 ---
 
@@ -32,7 +32,7 @@
 | ③ 基于上下文回答 | agent（模型） | —— |
 | ④ 回信（`chatroom_post` / `/api/post`） | **服务器** | 所有 agent 复用同一个 |
 
-**一句话**：接入器只需提供"当前宿主会话锚点"（②），其余 ①④ 服务器统一做。**会话绑定由 user 决定（不是 agent 猜）**，这就是下面的绑定协议。
+**一句话**：接入器只需提供"当前宿主会话锚点"（②），其余 ①④ 服务器统一做。**② 是注册契约的一部分：agent 注册时固定上报 `bound_session_id`，@ 按它精确投递，不广播。**
 
 > 判断这个项目"做完没"：先看 ①④ 是否在运行态生效（`/api/messages`、`/api/post`），再看接入器是否实现了 ②。
 
@@ -80,26 +80,11 @@ pyinstaller --noconfirm --onefile --name chatroom \
 
 ### 2. 注册（运行期，自动）
 
-接入器启动后上报 `POST /api/agent/{name}/host`（这也是一次 REST handshake），agent 就会出现在聊天室侧栏。
+接入器注册时上报 `name` + 它固定绑定的宿主 `bound_session_id`（注册契约：一个 chatroom 名字对应唯一一个宿主会话）。`@name` 就精确投递到那一个会话，绝不会广播到其它 session。
 
-### 3. 绑定 session（运行期，user 操作）
+### 3. 投递（运行期）
 
-在 Web GUI 侧栏点 agent 的 **bind** 按钮，选择注入到哪条宿主会话，或新建一条。之后 `@agent` 就会把 prompt 注入到这条会话。
-
----
-
-## 绑定协议（user 决定 @ 注入到哪条 session）
-
-这套 REST 协议是跨 agent 通用的。接入器只需实现"轮询 + 上报 + 认领"：
-
-| 端点 | 谁调 | 作用 |
-|---|---|---|
-| `POST /api/agent/{name}/host` | 接入器 | 上报宿主里可选会话列表 + 当前绑定（并自动注册） |
-| `POST /api/agent/{name}/bind` | user（GUI） | 排队一条指令：`{op: bind\|create\|unbind, session_id?, directory?}` |
-| `GET /api/agent/{name}/commands` | 接入器 | 轮询拉取待执行指令 |
-| `POST /api/agent/{name}/commands/ack` | 接入器 | 认领并回报新绑定 |
-
-`Session` 上多了三个字段：`bound_session_id`（当前绑定的宿主会话）、`host_sessions`（可选项列表）、`pending_command`（待执行指令）。旧文件读入时这些字段缺省，向后兼容。
+`@name` 的消息落库后，投递到 `bound_session_id` 指向的那条宿主会话，由接入器注入。agent 每轮心跳重新上报它此刻的现场 `bound_session_id`，session 在宿主侧被删后，下一跳会如实刷新。
 
 ---
 
@@ -109,10 +94,9 @@ pyinstaller --noconfirm --onefile --name chatroom \
 
 1. 把 `chatroom-bridge.ts` 复制到你要接 @ 的 opencode 项目的 `.opencode/plugin/` 目录
 2. 重启 opencode
-3. 在 chatroom 的 Web GUI 侧栏，opencode 会自动出现；点它的 **bind**，选一条会话（或 **+ New session** 新建）
-4. 在 chatroom 里发 `@opencode 帮我跑测试`，插件会把 prompt 注入你绑定的那条会话，让模型用自己的 `chatroom_post` 工具回复
+3. chatroom 侧栏出现 `opencode`；发 `@opencode 帮我跑测试`，插件把 prompt 注入到对应会话，让模型用自己的 `chatroom_post` 工具回复
 
-插件细节：轮询 `@opencode` 消息、多实例收敛（只让最新会话注入）、store reset 容忍、绑定指令 poll。`bind` → 注入指定会话；`unbind`/`auto` → 回退到目录下最新会话。
+插件细节：轮询 `@opencode` 消息、多实例收敛（只让当前会话注入）、store reset 容忍。单实例/单会话最稳，多同目录会话时收敛由插件内 `isPrimaryInstance` 保证。
 
 ---
 
@@ -121,10 +105,10 @@ pyinstaller --noconfirm --onefile --name chatroom \
 接入器：`examples/openwriter-plugin/chatroom_adapter.py`（仅标准库）。
 
 1. 复制到 `<workspace>/_tools/chatroom/adapter.py`
-2. `register(name="chatroom", type="channel", spec={adapter_path:"_tools/chatroom/adapter.py", auth_type:"none"})`
+2. `register(name="chatroom", type="channel", spec={adapter_path:"_tools/chatroom/adapter.py", auth_type:"none"})`，`register` 会把该 channel 绑到发起注册的那个 session
 3. 重启 OpenWriter
 
-adapter 每 `POLL_MS` 轮询 `/api/messages?after=lastId`，抓到 `to == MY_NAME` 就 `_emit(InboundMessage)` 交给宿主的 `bound_session_id` 会话；同时每 `HEARTBEAT_S` 秒走 MCP `chatroom_handshake` 保持 online。要让 OpenWriter 也支持"user 指定/新建会话"，adapter 照上面的绑定协议实现 `report_host` / `poll_commands` 即可（那部分在宿主侧，见 OpenWriter 的 channel API）。
+adapter 每 `POLL_MS` 轮询 `/api/messages?after=lastId`，抓到 `to == MY_NAME` 就 `_emit(InboundMessage)` 交给宿主的 `bound_session_id` 会话；同时每 `HEARTBEAT_S` 秒走 MCP `chatroom_handshake` 保持 online。
 
 ---
 

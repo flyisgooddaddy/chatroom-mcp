@@ -1,22 +1,22 @@
 """MCP server + Web GUI (FastMCP 1.x + FastAPI routes).
 
 Serves:
-  POST /mcp/get_stream /mcp  (MCP streamable-HTTP via FastMCP)
+  POST /mcp                  MCP streamable-HTTP (FastMCP) — 7 tools + 1 resource
   GET  /                     Web GUI (index.html)
   GET  /static/*             JS / CSS / favicon
-  GET  /api/messages         JSON list of messages (room-aware)
-  GET  /api/messages/poll    Long-poll: block until a new message or timeout
-  GET  /api/search           Full-text search over messages (room-aware)
-  GET  /api/stream           Server-Sent Events (real-time push)
   GET  /api/rooms            List available rooms
-  GET  /api/sessions         JSON list of sessions
-  POST /api/post             Post a message from the GUI (room-aware)
-  DELETE /api/sessions/{name}  Kick a session
-  POST /api/agent/{name}/host          Adapter reports selectable host sessions
-  POST /api/agent/{name}/bind          User queues bind|create|unbind command
-  GET  /api/agent/{name}/commands       Adapter polls pending binding commands
-  POST /api/agent/{name}/commands/ack   Adapter confirms it handled the command
-  WS   /ws                   WebSocket: broadcasts new messages + session events
+  GET  /api/messages         List messages (room, limit, after, before)
+  DELETE /api/messages/{id}  Delete one message
+  DELETE /api/messages       Clear room
+  GET  /api/messages/poll    Long-poll for new messages
+  GET  /api/search           Full-text search over messages
+  GET  /api/stream           Server-Sent Events (real-time push)
+  GET  /api/sessions         List registered agent sessions
+  POST /api/post             Post a message from the GUI
+  DELETE /api/sessions/{name}    Kick + ban an agent (persistent)
+  DELETE /api/agents/{name}/hosts/{sid}  Kick + ban a single host (persistent)
+  GET  /api/bans                 List all (name, sid) entries in the ban list
+  WS   /ws                   WebSocket broadcast + snapshot
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,7 +36,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from chatroom.hub import hub
-from chatroom.sessions import SessionRegistry
+from chatroom.sessions import Agent, AgentRegistry, HostSession
 from chatroom.store import DEFAULT_ROOM, Store
 
 TOOL_HANDSHAKE = "chatroom_handshake"
@@ -53,6 +54,23 @@ STATIC_DIR = WEB_DIR / "static"
 SSE_HEARTBEAT = 15.0
 
 
+async def _probe_one(sessions, name: str, sid: str, callback_url: str) -> bool:
+    """GET callback_url; on 2xx, refresh last_seen. Returns success.
+
+    Module-level so the contract is independently testable; the lifespan's
+    background loop just iterates and calls this.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
+            r = await client.get(callback_url)
+        if 200 <= r.status_code < 300:
+            sessions.heartbeat(name, sid)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _msg_id_key(msg_id: str) -> int:
     try:
         return int(msg_id.split("-", 1)[1])
@@ -60,20 +78,65 @@ def _msg_id_key(msg_id: str) -> int:
         return 0
 
 
+def _resolve_push_target(target: str, sessions):
+    """Look up the (callback_url, agent_name, host) tuple to push @-mention to.
+
+    Two-stage lookup:
+      1. `target` is an agent name → use its active host (live; falls back to
+         most-recent live if active_sid unset).
+      2. `target` is a session_name under some agent → push to that specific host.
+
+    Agent-name match wins over session-name match on collision.
+    Returns (callback_url, agent_name, host_sid) or None.
+    """
+    if not target:
+        return None
+    try:
+        sessions._load()
+    except Exception:
+        pass
+    agent = sessions.get_agent(target)
+    if agent is not None:
+        host = agent.active_host
+        if host and host.callback_url:
+            return host.callback_url, agent.name, host.sid
+        return None
+    # Fallback: search all agents' hosts for a matching session_name
+    matches: list[tuple[Agent, HostSession]] = []
+    for a in sessions.all_agents():
+        for h in a.hosts:
+            if h.session_name == target and h.callback_url:
+                matches.append((a, h))
+    if len(matches) == 1:
+        a, h = matches[0]
+        return h.callback_url, a.name, h.sid
+    if len(matches) > 1:
+        # Ambiguous: prefer the one that is currently active in its parent agent.
+        for a, h in matches:
+            if a.active_sid == h.sid:
+                return h.callback_url, a.name, h.sid
+        # Still ambiguous — go with the first but caller may want to log.
+        a, h = matches[0]
+        return h.callback_url, a.name, h.sid
+    return None
+
+
 async def _notify_and_broadcast(stored: dict[str, Any], sessions) -> None:
-    """Fire push to @-target agent (best-effort) + broadcast to WS/SSE clients."""
+    """Fire push to @-target (agent name or session_name) + broadcast.
+
+    Push is routed to the resolved host's callback_url. If `target` doesn't
+    resolve (no agent, no host with that session_name, host has no callback,
+    or all hosts stale), the push is silently dropped.
+    """
     target = stored.get("to")
     if target:
-        try:
-            sessions._load()
-        except Exception:
-            pass
-        sess = sessions.get(target)
-        if sess and sess.callback_url:
+        resolved = _resolve_push_target(target, sessions)
+        if resolved:
+            callback_url, _agent_name, _sid = resolved
             try:
                 from chatroom.push import notify
 
-                await notify(sess.callback_url, {"event": "chatroom_message", "message": stored})
+                await notify(callback_url, {"event": "chatroom_message", "message": stored})
             except Exception:
                 pass
     await hub.broadcast({"kind": "message", "message": stored})
@@ -87,7 +150,7 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
     """Build the FastMCP instance + register tools. Reads/writes via store registry."""
     if sessions is None:
         # sessions not stored by room; first room's registry is the canonical one
-        sessions = SessionRegistry(next(iter(stores.values())).comms_dir)
+        sessions = AgentRegistry(next(iter(stores.values())).comms_dir)
 
     mcp = FastMCP(
         name="chatroom-mcp",
@@ -99,7 +162,7 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
         # the MCP endpoint return 421 "Invalid Host header" for any LAN IP.
         # We run on 0.0.0.0 for LAN access, so disable the host allowlist here.
         # (Safer alternative: keep it on and whitelist your LAN IP, e.g.
-        #  allowed_hosts=["127.0.0.1:*","localhost:*","[::1]:*","192.168.31.201:*"].)
+        #  allowed_hosts=["127.0.0.1:*","localhost:*","[::1]:*","<YOUR_LAN_IP>:*"].)
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
         instructions=(
             "A shared chatroom for AI agents and humans. "
@@ -109,11 +172,33 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
         ),
     )
 
-    @mcp.tool(name=TOOL_HANDSHAKE, description="Register or refresh an agent session.")
-    async def handshake(name: str, callback_url: str | None = None) -> dict[str, Any]:
-        sess = sessions.handshake(name=name, callback_url=callback_url)
-        await hub.broadcast({"kind": "session_joined", "session": sess.to_dict()})
-        return sess.to_dict()
+    @mcp.tool(
+        name=TOOL_HANDSHAKE,
+        description=(
+            "Register or refresh an agent host. callback_url is optional; provide it "
+            "only if you expose an HTTP endpoint the chatroom can POST @-mentions to. "
+            "Without it, @-mentions are still stored and retrievable via chatroom_pull, "
+            "but no push is attempted. Multiple hosts per agent name are allowed; the "
+            "latest handshake becomes the active binding."
+        ),
+    )
+    async def handshake(
+        name: str,
+        bound_session_id: str,
+        callback_url: str = "",
+        session_name: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            agent = sessions.handshake(
+                name=name,
+                bound_session_id=bound_session_id,
+                callback_url=callback_url,
+                session_name=session_name,
+            )
+        except ValueError as e:
+            return {"error": {"code": -32602, "message": str(e)}}
+        await hub.broadcast({"kind": "agent_joined", "agent": agent.to_dict()})
+        return agent.to_dict()
 
     @mcp.tool(
         name=TOOL_PULL,
@@ -150,9 +235,9 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
         store = _store_for(stores, room)
         return {"messages": store.read_all()[-limit:]}
 
-    @mcp.tool(name=TOOL_SESSIONS, description="List known agent sessions.")
+    @mcp.tool(name=TOOL_SESSIONS, description="List known agents (each with its hosts).")
     def list_sessions() -> dict[str, Any]:
-        return {"sessions": [s.to_dict() for s in sessions.all()]}
+        return {"agents": [a.to_dict() for a in sessions.all_agents()]}
 
     @mcp.tool(
         name=TOOL_SEARCH,
@@ -190,7 +275,7 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
         room_names.insert(0, DEFAULT_ROOM)
 
     stores: dict[str, Store] = {r: Store(comms_dir, r) for r in room_names}
-    sessions = SessionRegistry(comms_dir)
+    sessions = AgentRegistry(comms_dir)
     mcp = _build_mcp(stores, sessions=sessions)
     # Build the MCP ASGI app up front so mcp.session_manager is initialized.
     # NOTE: Starlette's Mount does NOT run the child app's lifespan, so the
@@ -202,7 +287,30 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
         async with mcp.session_manager.run():
-            yield
+            probe_task = asyncio.create_task(_probe_loop())
+            try:
+                yield
+            finally:
+                probe_task.cancel()
+
+    probe_interval = 30.0
+
+    async def _probe_loop() -> None:
+        # Two rails: (a) probe active host callback_urls, (b) TTL GC stale hosts.
+        # This is the chatroom's self-cleaning contract: registration is not
+        # enough, liveness must be observable from chatroom's side.
+        while True:
+            try:
+                for name, host in sessions.probeable_hosts():
+                    await _probe_one(sessions, name, host.sid, host.callback_url)
+                stale = sessions.gc()
+                for agent_name, sid in stale:
+                    await hub.broadcast({"kind": "host_removed", "agent": agent_name, "sid": sid})
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            await asyncio.sleep(probe_interval)
 
     app = FastAPI(title="chatroom-mcp", version="0.2.0", lifespan=lifespan)
     app.state.sessions = sessions
@@ -322,8 +430,9 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
 
     @app.get("/api/sessions")
     async def api_sessions() -> dict[str, Any]:
-        sessions._load()
-        return {"sessions": [s.to_dict() for s in sessions.all()]}
+        # Lazy GC so a long-idle sidebar can never show zombie hosts.
+        sessions.gc()
+        return {"agents": [a.to_dict() for a in sessions.all_agents()]}
 
     @app.post("/api/post")
     async def api_post(payload: dict[str, Any], room: str = DEFAULT_ROOM) -> dict[str, Any]:
@@ -343,73 +452,49 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
 
     @app.delete("/api/sessions/{name}")
     async def api_kick(name: str) -> dict[str, Any]:
-        """Remove a session entirely (so it disappears from sidebar)."""
+        """Ban + remove an agent (and all its hosts) from the registry + sidebar.
+
+        Kick is now persistent: the (name) ban is added to the persistent ban
+        list, so even if the adapter keeps calling chatroom_handshake every 30s
+        the call is rejected and the agent stays disconnected until the ban is
+        removed by editing the "bans" array in _sessions.json.
+        """
         sessions._load()
-        if name not in sessions._sessions:
-            raise HTTPException(404, f"no session named {name!r}")
-        sessions._sessions.pop(name)
-        sessions._save()
-        await hub.broadcast({"kind": "session_removed", "name": name})
-        return {"removed": name}
+        if not sessions.get_agent(name) and not sessions.is_banned(name):
+            raise HTTPException(404, f"no agent named {name!r}")
+        sessions.ban(name)
+        await hub.broadcast({"kind": "agent_removed", "name": name})
+        return {"removed": name, "banned": True}
 
-    # --- session binding protocol (the user decides which host session gets @) ---
+    @app.post("/api/agents/{name}/active")
+    async def api_set_active(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Switch the active host of an agent (which sid gets @-push)."""
+        sid = payload.get("sid")
+        if not sid:
+            raise HTTPException(400, "sid required")
+        try:
+            agent = sessions.set_active(name, sid)
+        except ValueError as e:
+            raise HTTPException(404, str(e)) from e
+        await hub.broadcast({"kind": "active_changed", "agent": agent.to_dict()})
+        return agent.to_dict()
 
-    def _ensure_session(name: str):
-        """Binding endpoints auto-register on first contact (acts as a REST
-        handshake), so an adapter that only reports host conversations still
-        shows up in the sidebar."""
-        sessions._load()
-        if name not in sessions._sessions:
-            sessions.handshake(name)
-        return sessions._sessions[name]
+    @app.delete("/api/agents/{name}/hosts/{sid}")
+    async def api_remove_host(name: str, sid: str) -> dict[str, Any]:
+        """Ban + remove a single host (sid). Other sids under the same agent
+        can still register; only this (name, sid) is rejected on handshake.
+        """
+        if not sessions.get_agent(name) and not sessions.is_banned(name, sid):
+            raise HTTPException(404, f"host {sid!r} of agent {name!r} not found")
+        sessions.ban(name, sid)
+        await hub.broadcast({"kind": "host_removed", "agent": name, "sid": sid})
+        return {"removed": {"agent": name, "sid": sid}, "banned": True}
 
-    @app.post("/api/agent/{name}/host")
-    async def api_agent_report_host(name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Agent adapter reports its selectable host conversations + current binding."""
-        _ensure_session(name)
-        sess = sessions.report_host(
-            name,
-            host_sessions=payload.get("host_sessions") or [],
-            bound_session_id=payload.get("bound_session_id"),
-        )
-        await hub.broadcast({"kind": "session_updated", "session": sess.to_dict()})
-        return sess.to_dict()
-
-    @app.post("/api/agent/{name}/bind")
-    async def api_agent_bind(name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """User queues a binding command: {op: bind|create|unbind, session_id?, directory?}."""
-        op = str(payload.get("op") or "bind")
-        if op not in ("bind", "create", "unbind"):
-            raise HTTPException(400, f"invalid op {op!r}")
-        _ensure_session(name)
-        sess = sessions.set_pending(
-            name,
-            op,
-            session_id=payload.get("session_id"),
-            directory=payload.get("directory"),
-        )
-        await hub.broadcast({"kind": "session_updated", "session": sess.to_dict()})
-        return sess.to_dict()
-
-    @app.get("/api/agent/{name}/commands")
-    async def api_agent_commands(name: str) -> dict[str, Any]:
-        """Agent adapter polls this for pending binding commands."""
-        _ensure_session(name)
-        sess = sessions.get(name)
-        cmd = sess.pending_command if sess is not None else None
-        return {"commands": [cmd] if cmd else []}
-
-    @app.post("/api/agent/{name}/commands/ack")
-    async def api_agent_commands_ack(name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Agent adapter confirms it handled the pending command."""
-        _ensure_session(name)
-        sess = sessions.ack_pending(
-            name,
-            bound_session_id=payload.get("bound_session_id"),
-            host_sessions=payload.get("host_sessions"),
-        )
-        await hub.broadcast({"kind": "session_updated", "session": sess.to_dict()})
-        return sess.to_dict()
+    @app.get("/api/bans")
+    async def api_list_bans() -> dict[str, Any]:
+        """List all (name, sid) entries currently in the persistent ban list.
+        sid=null means the whole agent name is banned (any sid rejected)."""
+        return {"bans": [{"name": n, "sid": s} for (n, s) in sessions.banned()]}
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket):
@@ -418,7 +503,7 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
             snapshot = {
                 "kind": "snapshot",
                 "messages": stores[DEFAULT_ROOM].read_all()[-100:],
-                "sessions": [s.to_dict() for s in sessions.all()],
+                "agents": [a.to_dict() for a in sessions.all_agents()],
                 "rooms": room_names,
             }
             try:
@@ -436,6 +521,20 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
 
     # Mount MCP streamable HTTP at /mcp (endpoint serves at /mcp/)
     app.mount("/mcp", mcp_app)
+
+    @app.middleware("http")
+    async def _mcp_alias_no_trailing_slash(request, call_next):
+        """Serve /mcp (no trailing slash) as /mcp/ instead of 307-redirecting.
+
+        Starlette's Mount redirects `/mcp` -> `/mcp/` with 307, but streamable-HTTP
+        clients POST `initialize` to `/mcp` and many of them do not follow redirects
+        (a 307 on POST requires replaying the body), so the connection never completes.
+        Rewrite the path in-process so both spellings work.
+        """
+        if request.scope.get("path", "").rstrip("/") == "/mcp":
+            request.scope["path"] = "/mcp/"
+            request.scope["raw_path"] = b"/mcp/"
+        return await call_next(request)
 
     return app
 
