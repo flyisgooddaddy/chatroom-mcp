@@ -28,12 +28,64 @@ the CURRENT OpenWriter session, and keep the agent visible as "online".
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
 import urllib.error
 import urllib.request
 
 from channel.adapter import ChannelAdapter
 from channel.model import InboundMessage
+
+
+def _find_bound_session_id(channel_name: str = "chatroom") -> str:
+    """从 workspace 的 _system/register/_schema.yaml 读取本 channel 的 bound_session_id.
+
+    adapter 实例拿不到 host 侧绑定, 而 chatroom_handshake 必需 bound_session_id,
+    所以这里直接读 register 写的权威来源 (entry.bound_session_id).
+    搜索策略: 向上逐级找 _system/register/_schema.yaml; 也看 workspace 环境变量。
+    找不到返回 "" (调用方会跳过心跳, 不误报 online)。
+    """
+    candidates = []
+    # 显式环境变量优先
+    env = os.environ.get("OPENWRITER_WORKSPACE") or os.environ.get("WORKSPACE_DIR")
+    if env:
+        candidates.append(env)
+    # 从本文件位置向上找 workspace
+    here = os.path.dirname(os.path.abspath(__file__))
+    p = here
+    for _ in range(8):
+        candidates.append(p)
+        nxt = os.path.dirname(p)
+        if nxt == p:
+            break
+        p = nxt
+    seen = set()
+    for base in candidates:
+        if not base or base in seen:
+            continue
+        seen.add(base)
+        schema = os.path.join(base, "_system", "register", "_schema.yaml")
+        if not os.path.isfile(schema):
+            continue
+        try:
+            with open(schema, "r", encoding="utf-8") as f:
+                text = f.read()
+        except Exception:
+            continue
+        # 轻量解析: 定位 capabilities.<channel_name>: 块, 取其中 bound_session_id
+        m = re.search(
+            r"(?m)^  " + re.escape(channel_name) + r":\s*$", text)
+        if not m:
+            continue
+        tail = text[m.end():]
+        # 到下一个顶层 capability (两空格缩进的 key) 为止
+        nxt = re.search(r"(?m)^  \S", tail)
+        block = tail[: nxt.start()] if nxt else tail
+        b = re.search(r"(?m)^    bound_session_id:\s*(\S+)\s*$", block)
+        if b:
+            return b.group(1).strip().strip("'\"")
+    return ""
 
 # ---- 配置 (可用 config dict 覆盖) ----
 CHAT_URL = "http://127.0.0.1:7777"   # chatroom-mcp server (MCP 走 <url>/mcp/, 且 Host 需被 server 信任, 用 127.0.0.1)
@@ -105,6 +157,10 @@ class ChatroomAdapter(ChannelAdapter):
         self.poll_ms = int(cfg.get("poll_ms") or POLL_MS)
         self.heartbeat_s = int(cfg.get("heartbeat_s", HEARTBEAT_S))
 
+        self.bound_session_id = str(
+            cfg.get("bound_session_id") or _find_bound_session_id(self.name) or "")
+        self._targets_cache: set | None = None
+        self._targets_cache_at: float = 0.0
         self._thread: threading.Thread | None = None
         self._hb_thread: threading.Thread | None = None
         self._mcp_sid: str | None = None
@@ -191,14 +247,55 @@ class ChatroomAdapter(ChannelAdapter):
                 raw={"chatroom": True, "message": m},
             ))
 
+    def _acceptable_targets(self) -> set:
+        """本 agent 可被 @ 寻址的名字集合.
+
+        chatroom 约定: @ 寻址的是 'session' (host.session_name / sid), 不是 agent 组名.
+        同时兼容旧的 'to == agent 名' 写法, 所以这里收集:
+          - agent 名 (self.my_name)
+          - 绑定的 sid (self.bound_session_id)
+          - 该 host 在 server 上的 session_name (如 'ses_36b9')
+        结果带缓存 (_targets_cache), 心跳里 server 端 session 可能新建 -> 定期失效.
+        """
+        if self._targets_cache is not None:
+            return self._targets_cache
+        names = {self.my_name}
+        if self.bound_session_id:
+            names.add(self.bound_session_id)
+            # session_name 常是 sid 的短前缀形式 (ses_36b9548a4455 -> ses_36b9)
+            names.add(self.bound_session_id[:7])
+        # 尝试从 server 拉 session_name (权威)
+        try:
+            d = _http_get_json(f"{self.chat_url}/api/sessions")
+            for a in (d or {}).get("agents", []):
+                if a.get("name") != self.my_name:
+                    continue
+                for h in a.get("hosts", []):
+                    sn = str(h.get("session_name") or "").strip()
+                    sid = str(h.get("sid") or "").strip()
+                    if sn:
+                        names.add(sn)
+                    if sid:
+                        names.add(sid)
+        except Exception:
+            pass
+        names.discard("")
+        self._targets_cache = names
+        return names
+
     def _is_for_me(self, m: dict) -> bool:
-        to = str(m.get("to") or "")
+        to = str(m.get("to") or "").strip()
         subj = str(m.get("subject") or "")
         body = str(m.get("body") or "")
-        if to == self.my_name:
+        targets = self._acceptable_targets()
+        if to and to in targets:
             return True
-        pref = f"@{self.my_name}"
-        return subj.startswith(pref) or body.startswith(pref)
+        # body / subject 里任意位置出现 @<target> 也算 (GUI 会把正文里所有 @ 保留)
+        for t in targets:
+            pref = f"@{t}"
+            if pref in subj or pref in body:
+                return True
+        return False
 
     # ---- MCP 会话心跳 (保持 online) ----
 
@@ -240,11 +337,27 @@ class ChatroomAdapter(ChannelAdapter):
         return True
 
     def _do_heartbeat(self) -> bool:
+        if not self.bound_session_id:
+            # 拿不到绑定 session 就不发心跳 (否则 server 报 bound_session_id 缺失)
+            self._online = False
+            self._last_error = "no bound_session_id (见 _schema.yaml)"
+            return False
         self._mcp_ensure_session()
         resp = self._mcp_call("tools/call", {
-            "name": "chatroom_handshake", "arguments": {"name": self.my_name}})
-        ok = bool(resp and resp.get("result"))
+            "name": "chatroom_handshake",
+            "arguments": {
+                "name": self.my_name,
+                "bound_session_id": self.bound_session_id,
+            }})
+        result = (resp or {}).get("result")
+        # MCP 工具错误: HTTP 200 但 result.isError == True (或 result.error)
+        ok = bool(result) and not result.get("isError") and not result.get("error")
         self._online = ok
+        if not ok and resp is not None:
+            try:
+                self._last_error = json.dumps(result, ensure_ascii=False)[:300]
+            except Exception:
+                self._last_error = "handshake failed"
         return ok
 
     def _heartbeat_loop(self) -> None:
@@ -279,6 +392,7 @@ class ChatroomAdapter(ChannelAdapter):
             "name": self.name, "running": self.is_running(), "online": self._online,
             "chat_url": self.chat_url, "my_name": self.my_name, "room": self.room,
             "poll_ms": self.poll_ms, "heartbeat_s": self.heartbeat_s,
+            "bound_session_id": self.bound_session_id,
             "last_id": self._last_id, "primed": self._primed,
             "last_error": self._last_error, "auth": self.auth_type,
         }

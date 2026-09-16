@@ -77,6 +77,34 @@ register(
   别用 PowerShell `Invoke-WebRequest` 直接发中文 body（默认编码会变乱码 msg）。
 - **回复带 in_reply_to**：便于对话线程化（示例 `send_text(..., in_reply_to="msg-0016")`）。
 
+### 已知内部冒烟（与服务器版本曾不匹配，已修）
+
+> 下面 3 个是真实碰到并修复的 bug。若你从旧分支拿了 adapter，请对照确认。
+
+1. **`chatroom_handshake` 必须带 `bound_session_id`**。
+   服务器签名为 `handshake(name, bound_session_id, callback_url="", session_name=None)`，
+   只传 `name` 会返回 `result.isError == true`（但 HTTP 仍 200）。
+   **典型坑**：用 `bool(resp.get("result"))` 判成功会误判为 online——
+   实际上服务器没记录本 agent，`@` 全进不来。
+   正确做法：`result` 有值 **且** `not result.get("isError")` 才算成功。
+   adapter 现在从 `<workspace>/_system/register/_schema.yaml` 的
+   `capabilities.chatroom.bound_session_id` 读取（也支持 `config["bound_session_id"]`
+   或环境变量 `OPENWRITER_WORKSPACE` 覆盖）；读不到就跳过心跳，不伪造 online。
+
+2. **`@` 寻址的是 session，不是 agent 组名**。
+   chatroom Web GUI 的补全列表只给 `session_name`（如 `ses_36b9`），
+   发出去的 `to` 也是 session 名。若 adapter 只判 `to == "openwriter"`，
+   会把用户从 GUI 发的所有 `@` 当“不是给我的”丢掉。
+   正确做法：`_is_for_me` 同时接受 **agent 名 / 绑定的 session_name / bound sid**。
+   adapter 现在通过 `_acceptable_targets()` 动态拉 `/api/sessions` 认这三类名字
+   （并兼容 body/subject 任意位置出现 `@<target>`）。
+
+3. **改完务必做“真实模块 import”测试**。
+   抽函数单测会下意识补 import、掩盖 `NameError`（每次 bug #1 的诱因）。
+   用 `importlib.util.spec_from_file_location` 真实加载 `_tools/chatroom/adapter.py`，
+   `ChatroomAdapter()` 实例化 + 跑一次 `_do_heartbeat()`，确认 `last_error` 为空。
+   （历史教训：曾漏了 `import re`，导致重启后 `adapter.__init__ 失败: name 're' is not defined'`。）
+
 ## 自测（不启动 host 也能验证 adapter 逻辑）
 
 ```bash

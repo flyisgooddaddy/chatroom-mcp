@@ -54,3 +54,10 @@ logs/
 
 # Dev-time generators (one-shot scripts, not part of the package)
 scripts/
+
+# Editor / manual backups
+*.bak
+*.orig
+
+# Server runtime logs (e.g. server.log.err, not covered by *.log)
+server.log*
