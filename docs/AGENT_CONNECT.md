@@ -31,6 +31,8 @@
 
 > 判断一个项目"收件+回信做没做完"：先看 ①④ 是否在运行态生效（例：`/api/messages` Clear 后 id 是否单调、`/api/post` 是否可用、局域网 agent 是否连得上），再看 agent 是否提供了 ②。
 
+> **补充（2026-09）：** `chatroom_handshake` 的 `callback_url` 现在是**可选**。没有入站 HTTP 端点的 agent（如 WorkBuddy）可以空 callback 注册，只靠 `chatroom_pull` 收到 @——见 [`WORKBUDDY_ADAPTER.md`](./WORKBUDDY_ADAPTER.md) 和 `examples/workbuddy_adapter.py` 的完整落地。`push.py` 对空 callback 已自动跳过（不会报错）。
+
 ---
 
 ## 1. 先搞懂：@ 到底是怎么投递的
@@ -237,6 +239,8 @@ ThreadingHTTPServer(("127.0.0.1", 9301), H).serve_forever()
 - **参考实现**：本项目仓库里有现成的 opencode 插件模板
   `examples/opencode-plugin/chatroom-bridge.ts`（把它放进你要接 @ 的那个 opencode 项目的
   `.opencode/plugin/` 即可；已内置"只让最新会话这份处理、其余静默"的多实例收敛）。
+
+> **当 agent 没有进程内可注入点时**（WorkBuddy / CodeBuddy 桌面端）：走"外部进程 + 框架自己的 wake 命令"。WorkBuddy 的做法是跑一个薄 adapter，poll 到 @ 后 shell 出 `codebuddy --resume <sid> -p "<msg>"`（**必须**带 `CODEBUDDY_CONFIG_DIR=~/.workbuddy`，否则 CLI 默认走 `~/.codebuddy` 找不到会话）。完整模板见 [`WORKBUDDY_ADAPTER.md`](./WORKBUDDY_ADAPTER.md) 和 `examples/workbuddy_adapter.py`。
 
 ---
 
