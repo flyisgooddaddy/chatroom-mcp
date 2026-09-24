@@ -131,6 +131,7 @@ async function handshake() {
     bound_session_id: bound,
     callback_url: "",
     session_name: "opencode-desktop",
+    machine: MY_MACHINE,
   })
 }
 
@@ -262,7 +263,8 @@ async function fetchWorld(): Promise<string> {
     const agents: any[] = data?.agents ?? []
     const lines = agents.map((a: any) => {
       const h = (a?.hosts ?? [])[0] ?? {}
-      return `  - ${a?.name ?? "?"}: ${h?.status ?? "?"} sid=${a?.active_sid ?? "?"} machine=${MY_MACHINE}`
+      const m = h?.machine || "?"
+      return `  - ${a?.name ?? "?"}: ${h?.status ?? "?"} sid=${a?.active_sid ?? "?"} machine=${m}`
     })
     return `[chatroom-world]\nme: ${AGENT_NAME} (machine=${MY_MACHINE})\nonline:${lines.length ? "\n" + lines.join("\n") : " (none)"}`
   } catch {
