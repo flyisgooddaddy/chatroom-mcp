@@ -91,8 +91,12 @@ def test_set_active_then_remove_host(client):
     """Multi-host model: set active, then kick one host without removing the agent."""
     c, _ = client
     reg = c.app.state.sessions
-    reg.handshake("opencode", callback_url="http://A", bound_session_id="ses_A", session_name="上午")
-    reg.handshake("opencode", callback_url="http://B", bound_session_id="ses_B", session_name="晚间")
+    reg.handshake(
+        "opencode", callback_url="http://A", bound_session_id="ses_A", session_name="上午"
+    )
+    reg.handshake(
+        "opencode", callback_url="http://B", bound_session_id="ses_B", session_name="晚间"
+    )
     # switch active to A
     r = c.post("/api/agents/opencode/active", json={"sid": "ses_A"})
     assert r.status_code == 200
@@ -127,11 +131,14 @@ def test_kick_persists_via_banlist(client, tmp_path):
     (simulating server restart) still rejects handshake."""
     c, _tmp = client
     reg = c.app.state.sessions
-    reg.handshake("opencode", callback_url="http://x", bound_session_id="ses_A", session_name="上午")
+    reg.handshake(
+        "opencode", callback_url="http://x", bound_session_id="ses_A", session_name="上午"
+    )
     r = c.delete("/api/sessions/opencode")
     assert r.status_code == 200
     # fresh registry from same dir
     from chatroom.sessions import AgentRegistry
+
     fresh = AgentRegistry(tmp_path)
     assert fresh.get_agent("opencode") is None
     assert fresh.is_banned("opencode") is True
@@ -150,6 +157,7 @@ def test_kick_host_persists_via_banlist(client, tmp_path):
     r = c.delete("/api/agents/opencode/hosts/ses_A")
     assert r.status_code == 200
     from chatroom.sessions import AgentRegistry
+
     fresh = AgentRegistry(tmp_path)
     # ses_A banned, ses_B free
     assert fresh.is_banned("opencode", "ses_A") is True
@@ -205,9 +213,15 @@ def test_push_blocked_when_agent_has_no_live_host(client, monkeypatch):
     monkeypatch.setattr(push, "notify", fake_notify)
     r = c.post(
         "/api/post",
-        json={"msg": {"from": "human", "type": "finding",
-                       "timestamp": "2026-09-14T15:00:00+08:00",
-                       "subject": "hi @workbuddy", "to": "workbuddy"}},
+        json={
+            "msg": {
+                "from": "human",
+                "type": "finding",
+                "timestamp": "2026-09-14T15:00:00+08:00",
+                "subject": "hi @workbuddy",
+                "to": "workbuddy",
+            }
+        },
     )
     assert r.status_code == 200
     assert called == []
@@ -231,9 +245,15 @@ def test_push_routes_to_active_host_only(client, monkeypatch):
     monkeypatch.setattr(push, "notify", fake_notify)
     c.post(
         "/api/post",
-        json={"msg": {"from": "human", "type": "finding",
-                       "timestamp": "2026-09-14T15:00:00+08:00",
-                       "subject": "@opencode", "to": "opencode"}},
+        json={
+            "msg": {
+                "from": "human",
+                "type": "finding",
+                "timestamp": "2026-09-14T15:00:00+08:00",
+                "subject": "@opencode",
+                "to": "opencode",
+            }
+        },
     )
     assert called == ["http://B"]
     # switch active and re-test
@@ -241,9 +261,15 @@ def test_push_routes_to_active_host_only(client, monkeypatch):
     called.clear()
     c.post(
         "/api/post",
-        json={"msg": {"from": "human", "type": "finding",
-                       "timestamp": "2026-09-14T15:00:01+08:00",
-                       "subject": "@opencode again", "to": "opencode"}},
+        json={
+            "msg": {
+                "from": "human",
+                "type": "finding",
+                "timestamp": "2026-09-14T15:00:01+08:00",
+                "subject": "@opencode again",
+                "to": "opencode",
+            }
+        },
     )
     assert called == ["http://A"]
 
@@ -253,8 +279,12 @@ def test_push_routes_by_session_name(client, monkeypatch):
     c, _tmp = client
     reg = c.app.state.sessions
     # Two hosts, active = B (latest). Host A has a distinct session_name.
-    reg.handshake("opencode", callback_url="http://A", bound_session_id="ses_A", session_name="上午PE")
-    reg.handshake("opencode", callback_url="http://B", bound_session_id="ses_B", session_name="晚间修bug")
+    reg.handshake(
+        "opencode", callback_url="http://A", bound_session_id="ses_A", session_name="上午PE"
+    )
+    reg.handshake(
+        "opencode", callback_url="http://B", bound_session_id="ses_B", session_name="晚间修bug"
+    )
     assert reg.get_agent("opencode").active_sid == "ses_B"
     called = []
 
@@ -268,9 +298,15 @@ def test_push_routes_by_session_name(client, monkeypatch):
     # Target by session_name (上午PE) — should hit A, not the active B.
     c.post(
         "/api/post",
-        json={"msg": {"from": "human", "type": "finding",
-                       "timestamp": "2026-09-14T15:00:00+08:00",
-                       "subject": "@上午PE", "to": "上午PE"}},
+        json={
+            "msg": {
+                "from": "human",
+                "type": "finding",
+                "timestamp": "2026-09-14T15:00:00+08:00",
+                "subject": "@上午PE",
+                "to": "上午PE",
+            }
+        },
     )
     assert called == ["http://A"]
 
@@ -282,7 +318,9 @@ def test_push_agent_name_wins_on_collision(client, monkeypatch):
     reg = c.app.state.sessions
     # Agent "opencode" with active host B; a lookalike host ALSO named "opencode".
     reg.handshake("opencode", callback_url="http://B", bound_session_id="ses_B")
-    reg.handshake("opencode", callback_url="http://A", bound_session_id="ses_A", session_name="opencode")
+    reg.handshake(
+        "opencode", callback_url="http://A", bound_session_id="ses_A", session_name="opencode"
+    )
     reg.set_active("opencode", "ses_B")
     called = []
 
@@ -295,9 +333,15 @@ def test_push_agent_name_wins_on_collision(client, monkeypatch):
     monkeypatch.setattr(push, "notify", fake_notify)
     c.post(
         "/api/post",
-        json={"msg": {"from": "human", "type": "finding",
-                       "timestamp": "2026-09-14T15:00:00+08:00",
-                       "subject": "@opencode", "to": "opencode"}},
+        json={
+            "msg": {
+                "from": "human",
+                "type": "finding",
+                "timestamp": "2026-09-14T15:00:00+08:00",
+                "subject": "@opencode",
+                "to": "opencode",
+            }
+        },
     )
     assert called == ["http://B"]  # agent name wins → active host
 
@@ -316,9 +360,15 @@ def test_push_session_name_unknown_is_dropped(client, monkeypatch):
     monkeypatch.setattr(push, "notify", fake_notify)
     c.post(
         "/api/post",
-        json={"msg": {"from": "human", "type": "finding",
-                       "timestamp": "2026-09-14T15:00:00+08:00",
-                       "subject": "@ghost", "to": "ghost"}},
+        json={
+            "msg": {
+                "from": "human",
+                "type": "finding",
+                "timestamp": "2026-09-14T15:00:00+08:00",
+                "subject": "@ghost",
+                "to": "ghost",
+            }
+        },
     )
     assert called == []
 
@@ -337,10 +387,17 @@ def test_probe_one_refreshes_last_seen_on_2xx(client, monkeypatch):
         status_code = 200
 
     class _FakeClient:
-        def __init__(self, *a, **kw): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        async def get(self, url): return _FakeResp()
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            return _FakeResp()
 
     from chatroom import server
 
@@ -364,9 +421,15 @@ def test_probe_one_returns_false_on_failure(client, monkeypatch):
     assert active is not None
 
     class _BoomClient:
-        def __init__(self, *a, **kw): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
         async def get(self, url):
             raise ConnectionError("dead")
 
@@ -396,4 +459,3 @@ def test_static_dir(client):
             assert r.text == "hi"
     finally:
         target.unlink()
-

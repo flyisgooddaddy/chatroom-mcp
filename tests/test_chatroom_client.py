@@ -9,6 +9,7 @@ Plus config loading. The httpx transport and poll loop are deliberately
 out of scope — they need a live chatroom server (covered by integration
 tests under tests/integration/).
 """
+
 from __future__ import annotations
 
 import threading
@@ -121,17 +122,23 @@ def test_targeting_by_to_field() -> None:
 
 
 def test_targeting_by_at_in_subject() -> None:
-    assert is_targeting(
-        {"from": "alice", "to": "all", "subject": "FYI @opencode"},
-        ["opencode"],
-    ) is True
+    assert (
+        is_targeting(
+            {"from": "alice", "to": "all", "subject": "FYI @opencode"},
+            ["opencode"],
+        )
+        is True
+    )
 
 
 def test_targeting_by_at_in_body() -> None:
-    assert is_targeting(
-        {"from": "alice", "subject": "hi", "body": "hi @opencode please reply"},
-        ["opencode"],
-    ) is True
+    assert (
+        is_targeting(
+            {"from": "alice", "subject": "hi", "body": "hi @opencode please reply"},
+            ["opencode"],
+        )
+        is True
+    )
 
 
 def test_targeting_skips_self() -> None:
@@ -143,10 +150,13 @@ def test_targeting_alias_match() -> None:
 
 
 def test_targeting_unrelated_message() -> None:
-    assert is_targeting(
-        {"from": "alice", "to": "bob", "subject": "lunch?", "body": "want pizza?"},
-        ["opencode"],
-    ) is False
+    assert (
+        is_targeting(
+            {"from": "alice", "to": "bob", "subject": "lunch?", "body": "want pizza?"},
+            ["opencode"],
+        )
+        is False
+    )
 
 
 def test_targeting_empty_names_never_match() -> None:

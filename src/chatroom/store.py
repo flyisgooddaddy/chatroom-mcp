@@ -2,6 +2,7 @@
 
 P1 uses O_APPEND for atomic small writes; P2 adds cross-platform file lock.
 """
+
 from __future__ import annotations
 
 import json
@@ -120,8 +121,11 @@ class Store:
     def messages_after(self, since: str | None) -> list[dict[str, Any]]:
         cutoff = _ID_RE.match(since).group(1) if since and _ID_RE.match(since) else -1
         cutoff = int(cutoff)
-        return [m for m in self.iter_all()
-                if (mm := _ID_RE.match(str(m.get("id", "")))) and int(mm.group(1)) > cutoff]
+        return [
+            m
+            for m in self.iter_all()
+            if (mm := _ID_RE.match(str(m.get("id", "")))) and int(mm.group(1)) > cutoff
+        ]
 
     def search(self, query: str, field: str | None = None) -> list[dict[str, Any]]:
         """Substring search (case-insensitive). field None => all text fields."""
@@ -134,8 +138,9 @@ class Store:
                 if q in str(m.get(field, "")).lower():
                     out.append(m)
                 continue
-            hay = " ".join(str(m.get(k, "")) for k in
-                           ("id", "from", "to", "type", "subject", "body"))
+            hay = " ".join(
+                str(m.get(k, "")) for k in ("id", "from", "to", "type", "subject", "body")
+            )
             if q in hay.lower():
                 out.append(m)
         return out
@@ -150,7 +155,6 @@ class Store:
                     yield json.loads(line)
                 except json.JSONDecodeError:
                     continue
-
 
     # ---- 消息管理 (added by openwriter) ----
 
@@ -178,6 +182,7 @@ class Store:
     def _rewrite(self, msgs: list[dict[str, Any]]) -> None:
         """Atomically replace the messages file with `msgs` (backs up once)."""
         import time as _time
+
         ts = _time.strftime("%Y%m%d-%H%M%S")
         if self.messages_path.exists() and self.messages_path.stat().st_size > 0:
             bak = self.messages_path.with_name(self.messages_path.name + f".bak-{ts}")

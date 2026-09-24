@@ -1,4 +1,5 @@
-﻿"""Smoke tests for the JSONL store."""
+"""Smoke tests for the JSONL store."""
+
 import json
 from pathlib import Path
 
@@ -13,8 +14,12 @@ def tmp_store(tmp_path: Path) -> Store:
 
 
 def _msg(i, **over):
-    base = {"from": "human", "type": "finding",
-            "timestamp": f"2026-09-14T15:00:0{i}+08:00", "subject": f"msg {i}"}
+    base = {
+        "from": "human",
+        "type": "finding",
+        "timestamp": f"2026-09-14T15:00:0{i}+08:00",
+        "subject": f"msg {i}",
+    }
     base.update(over)
     return base
 
@@ -50,8 +55,11 @@ def test_ids_monotonic(tmp_store):
 def test_handles_existing_jsonl(tmp_path):
     p = tmp_path / "messages.jsonl"
     p.write_text(
-        json.dumps({"id": "msg-0010", "from": "h", "type": "finding",
-                    "timestamp": "t", "subject": "a"}, ensure_ascii=False) + chr(10),
+        json.dumps(
+            {"id": "msg-0010", "from": "h", "type": "finding", "timestamp": "t", "subject": "a"},
+            ensure_ascii=False,
+        )
+        + chr(10),
         encoding="utf-8",
     )
     s = Store(tmp_path)

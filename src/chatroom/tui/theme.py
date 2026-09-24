@@ -1,4 +1,5 @@
 """Colour themes (dark / light) for the TUI."""
+
 from __future__ import annotations
 
 AGENT_COLORS_DARK: dict[str, str] = {

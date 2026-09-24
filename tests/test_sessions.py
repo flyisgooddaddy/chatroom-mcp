@@ -31,7 +31,9 @@ def test_first_handshake_creates_agent_with_one_host(tmp_path: Path):
 def test_handshake_same_sid_refreshes_existing_host(tmp_path: Path):
     r = AgentRegistry(tmp_path)
     r.handshake("workbuddy", bound_session_id=BOUND, callback_url=CB)
-    a = r.handshake("workbuddy", bound_session_id=BOUND, callback_url="http://new", session_name="renamed")
+    a = r.handshake(
+        "workbuddy", bound_session_id=BOUND, callback_url="http://new", session_name="renamed"
+    )
     assert len(a.hosts) == 1  # not duplicated
     assert a.hosts[0].callback_url == "http://new"
     assert a.hosts[0].session_name == "renamed"
@@ -40,7 +42,9 @@ def test_handshake_same_sid_refreshes_existing_host(tmp_path: Path):
 def test_handshake_different_sid_adds_new_host(tmp_path: Path):
     r = AgentRegistry(tmp_path)
     a1 = r.handshake("opencode", bound_session_id="ses_A", callback_url=CB, session_name="上午")
-    a2 = r.handshake("opencode", bound_session_id="ses_B", callback_url="http://b", session_name="晚间")
+    a2 = r.handshake(
+        "opencode", bound_session_id="ses_B", callback_url="http://b", session_name="晚间"
+    )
     assert a1.name == a2.name == "opencode"
     assert {h.sid for h in a1.hosts} == {"ses_A", "ses_B"}
     # latest handshake sets active
@@ -138,13 +142,31 @@ def test_legacy_migration(tmp_path: Path):
     """Old flat _sessions.json gets migrated to grouped agents on first load."""
     legacy = {
         "sessions": [
-            {"name": "opencode", "session_id": "ses_X", "callback_url": "http://x",
-             "bound_session_id": "ses_X", "last_seen": 100.0, "status": "online",
-             "session_name": "上午"},
-            {"name": "opencode", "session_id": "ses_Y", "callback_url": "http://y",
-             "bound_session_id": "ses_Y", "last_seen": 200.0, "status": "online"},
-            {"name": "workbuddy", "session_id": "ses_A", "callback_url": "http://a",
-             "bound_session_id": "ses_A", "last_seen": 150.0, "status": "online"},
+            {
+                "name": "opencode",
+                "session_id": "ses_X",
+                "callback_url": "http://x",
+                "bound_session_id": "ses_X",
+                "last_seen": 100.0,
+                "status": "online",
+                "session_name": "上午",
+            },
+            {
+                "name": "opencode",
+                "session_id": "ses_Y",
+                "callback_url": "http://y",
+                "bound_session_id": "ses_Y",
+                "last_seen": 200.0,
+                "status": "online",
+            },
+            {
+                "name": "workbuddy",
+                "session_id": "ses_A",
+                "callback_url": "http://a",
+                "bound_session_id": "ses_A",
+                "last_seen": 150.0,
+                "status": "online",
+            },
         ]
     }
     p = tmp_path / "_sessions.json"
@@ -177,7 +199,9 @@ def test_max_hosts_evicts_stale(tmp_path: Path):
     a = r.get_agent("opencode")
     a.hosts[0].last_seen = time.time() - 999
     a.hosts[0].status = "offline"
-    a.hosts[0].effective_status.cache_clear() if hasattr(a.hosts[0].effective_status, "cache_clear") else None
+    a.hosts[0].effective_status.cache_clear() if hasattr(
+        a.hosts[0].effective_status, "cache_clear"
+    ) else None
     r._save()
     # New handshake should succeed (evicts the stale one)
     a2 = r.handshake("opencode", bound_session_id="ses_new", callback_url=CB)

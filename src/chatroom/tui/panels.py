@@ -1,5 +1,7 @@
 """Three-pane widgets (P1 stub)."""
+
 from __future__ import annotations
+
 from textual.containers import Container
 
 

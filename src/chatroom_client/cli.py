@@ -5,6 +5,7 @@ Usage:
     chatroom-client status   [-c chatroom.yaml]
     chatroom-client --version
 """
+
 from __future__ import annotations
 
 import argparse
