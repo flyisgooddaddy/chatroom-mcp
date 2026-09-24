@@ -454,6 +454,21 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
         msg.setdefault("from", "human")
         store = _store_for(stores, room)
         msg.setdefault("room", store.room)
+        # Validate + normalize any attachments: every file_id must exist and we
+        # stamp the server-side actual size (server wins over the client value).
+        atts = msg.get("attachments")
+        if atts:
+            cleaned: list[dict[str, Any]] = []
+            for att in atts:
+                if not isinstance(att, dict) or not att.get("file_id"):
+                    continue
+                fid = att["file_id"]
+                p = _safe_file_path(fid)
+                if not p.is_file():
+                    raise HTTPException(400, f"attachment {fid!r} not found")
+                att["size"] = p.stat().st_size
+                cleaned.append(att)
+            msg["attachments"] = cleaned or None
         try:
             stored = store.append(msg)
         except ValueError as e:
@@ -467,8 +482,8 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
     async def api_file_upload(file: UploadFile = File(...)) -> dict[str, Any]:
         """Upload an attachment. Writes atomically (tmp+rename); returns a
         reference for a message's `attachments` field."""
-        max_bytes = int(os.environ.get("CHATROOM_MAX_FILE_BYTES", "20971520"))  # 20 MB default
-        file_id = "f-" + secrets.token_hex(4)  # 8 random hex, unguessable
+        max_bytes = int(os.environ.get("CHATROOM_MAX_FILE_BYTES", "52428800"))  # 50 MB default
+        file_id = "f-" + secrets.token_hex(8)  # 16 random hex, unguessable
         filename = Path(file.filename or "upload").name  # strip any path
         # Stream to a temp file so we never buffer the whole upload in memory.
         tmp = files_dir / (file_id + ".tmp")
