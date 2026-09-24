@@ -50,6 +50,7 @@ class HostSession:
     callback_url: str       # chatroom pushes @-mentions here
     last_seen: float
     status: str = "online"
+    machine: str = ""       # machine label (e.g. "openwriter-bobo-T300LA"); empty for legacy hosts
 
     def effective_status(self, timeout: float = SESSION_TIMEOUT) -> str:
         if self.status == "offline":
@@ -180,6 +181,7 @@ class AgentRegistry:
         bound_session_id: str,
         callback_url: str = "",
         session_name: str | None = None,
+        machine: str = "",
     ) -> Agent:
         if not name:
             raise ValueError("missing name (register contract)")
@@ -199,6 +201,8 @@ class AgentRegistry:
             existing.callback_url = callback_url
             if session_name:
                 existing.session_name = session_name
+            if machine:
+                existing.machine = machine
         else:
             if len(agent.hosts) >= MAX_HOSTS_PER_AGENT:
                 evicted = self._evict_stale_host(agent)
@@ -214,6 +218,7 @@ class AgentRegistry:
                     callback_url=callback_url,
                     last_seen=now,
                     status="online",
+                    machine=machine,
                 )
             )
         # Auto-active: latest handshake wins. UI can override via set_active().

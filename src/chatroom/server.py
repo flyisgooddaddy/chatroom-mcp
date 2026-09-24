@@ -127,23 +127,27 @@ def _resolve_push_target(target: str, sessions):
 
 
 async def _notify_and_broadcast(stored: dict[str, Any], sessions) -> None:
-    """Fire push to @-target (agent name or session_name) + broadcast.
+    """Fire push to each @-target (agent name or session_name) + broadcast.
 
-    Push is routed to the resolved host's callback_url. If `target` doesn't
-    resolve (no agent, no host with that session_name, host has no callback,
-    or all hosts stale), the push is silently dropped.
+    `stored["to"]` may be a single string (legacy) or a list[str] for multi-target.
+    Each target is resolved independently; pushes that don't resolve are silently
+    dropped. Always broadcasts the snapshot over the hub regardless of push outcome.
     """
     target = stored.get("to")
     if target:
-        resolved = _resolve_push_target(target, sessions)
-        if resolved:
-            callback_url, _agent_name, _sid = resolved
-            try:
-                from chatroom.push import notify
+        targets = target if isinstance(target, list) else [target]
+        for t in targets:
+            if not isinstance(t, str) or not t:
+                continue
+            resolved = _resolve_push_target(t, sessions)
+            if resolved:
+                callback_url, _agent_name, _sid = resolved
+                try:
+                    from chatroom.push import notify
 
-                await notify(callback_url, {"event": "chatroom_message", "message": stored})
-            except Exception:
-                pass
+                    await notify(callback_url, {"event": "chatroom_message", "message": stored})
+                except Exception:
+                    pass
     await hub.broadcast({"kind": "message", "message": stored})
 
 
@@ -192,6 +196,7 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
         bound_session_id: str,
         callback_url: str = "",
         session_name: str | None = None,
+        machine: str = "",
     ) -> dict[str, Any]:
         try:
             agent = sessions.handshake(
@@ -199,6 +204,7 @@ def _build_mcp(stores: dict[str, Store], sessions=None) -> FastMCP:
                 bound_session_id=bound_session_id,
                 callback_url=callback_url,
                 session_name=session_name,
+                machine=machine,
             )
         except ValueError as e:
             return {"error": {"code": -32602, "message": str(e)}}
