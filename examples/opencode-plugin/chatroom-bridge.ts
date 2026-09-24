@@ -1,12 +1,15 @@
 import type { Plugin } from "@opencode-ai/plugin"
 import { appendFile, mkdir, open, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import { homedir } from "node:os"
+import { homedir, hostname } from "node:os"
 
 const CHATROOM_HTTP = process.env.CHATROOM_HTTP ?? "http://192.168.31.127:7777"
 const MCP_URL = `${CHATROOM_HTTP}/mcp/`
 const AGENT_NAME = "opencode"
 const AGENT_ALIASES = ["opencode", "opencode-desktop", "main-agent", "opencode-bobo-001"]
+// Machine label for the world-snapshot block. Placeholder until the server's
+// (a1) handshake machine field lands; override via CHATROOM_MACHINE.
+const MY_MACHINE = process.env.CHATROOM_MACHINE ?? (() => { try { return hostname() } catch { return "unknown" } })()
 const ROOM = "main"
 const HEARTBEAT_MS = 30_000
 const POLL_TIMEOUT_S = 25
@@ -128,6 +131,7 @@ async function handshake() {
     bound_session_id: bound,
     callback_url: "",
     session_name: "opencode-desktop",
+    machine: MY_MACHINE,
   })
 }
 
@@ -244,13 +248,46 @@ async function sessionIdsFor(client: any): Promise<Set<string> | null> {
 //
 // Prompt is intentionally short: chatroom message body + a one-line hint
 // about chatroom_post. No command-style instructions, no parameter dumps.
+
+// Build a short "chatroom world" snapshot (who's online, where we are) so the
+// model isn't blind to the room — multi-agent can tell it's a co-responder and
+// knows which machine the other agents run on. Kept tiny; screenshots of full
+// logs are the model's own chatroom_history concern.
+async function fetchWorld(): Promise<string> {
+  try {
+    const res = await withTimeout(
+      fetch(`${CHATROOM_HTTP}/api/sessions`, { headers: { Accept: "application/json" } }),
+      5_000, "world.sessions",
+    )
+    const data: any = await res.json()
+    const agents: any[] = data?.agents ?? []
+    const lines = agents.map((a: any) => {
+      const h = (a?.hosts ?? [])[0] ?? {}
+      const m = h?.machine || "?"
+      return `  - ${a?.name ?? "?"}: ${h?.status ?? "?"} sid=${a?.active_sid ?? "?"} machine=${m}`
+    })
+    return `[chatroom-world]\nme: ${AGENT_NAME} (machine=${MY_MACHINE})\nonline:${lines.length ? "\n" + lines.join("\n") : " (none)"}`
+  } catch {
+    return `[chatroom-world]\nme: ${AGENT_NAME} (machine=${MY_MACHINE})\nonline: (unavailable)`
+  }
+}
+
+function fmtTo(to: any): string {
+  if (Array.isArray(to)) return to.filter(Boolean).join(", ")
+  return String(to ?? "")
+}
+
 async function injectIntoSession(client: any, sessionId: string, msg: any): Promise<void> {
+  const world = await fetchWorld()
   const prompt =
-    `[chatroom @${AGENT_NAME}] from=${msg.from ?? "?"} id=${msg.id}` +
-    (msg.subject ? `  subject: ${msg.subject}\n` : "\n") +
-    (msg.body ? `\n${msg.body}\n` : "") +
-    (msg.in_reply_to ? `\n(in_reply_to: ${msg.in_reply_to})\n` : "") +
-    `\n（chatroom @${AGENT_NAME} 收到新消息；如需回复，用 chatroom MCP 工具 chatroom_post，in_reply_to=${msg.id}）`
+    world + "\n\n" +
+    `[chatroom @${AGENT_NAME}] id=${msg.id} from=${msg.from ?? "?"}` +
+    (msg.to !== undefined ? ` to=${fmtTo(msg.to)}` : "") +
+    ` type=${msg.type ?? "?"}` +
+    (msg.subject ? `\n  subject: ${msg.subject}` : "") +
+    (msg.body ? `\n\n${msg.body}` : "") +
+    (msg.in_reply_to ? `\n(in_reply_to: ${msg.in_reply_to})` : "") +
+    `\n\n（chatroom @${AGENT_NAME} 收到新消息；如需回复，用 chatroom MCP 工具 chatroom_post，in_reply_to=${msg.id}）`
 
   try {
     // mark BEFORE prompting: the resulting role=user event can arrive almost
