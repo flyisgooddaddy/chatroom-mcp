@@ -30,6 +30,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+client = [
+    "pyyaml>=6.0",
+    "anyio>=4.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
@@ -38,13 +42,14 @@ dev = [
 
 [project.scripts]
 chatroom = "chatroom.cli:main"
+chatroom-client = "chatroom_client.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/bobo/chatroom-mcp"
 Issues = "https://github.com/bobo/chatroom-mcp/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/chatroom"]
+packages = ["src/chatroom", "src/chatroom_client"]
 
 [tool.ruff]
 line-length = 100

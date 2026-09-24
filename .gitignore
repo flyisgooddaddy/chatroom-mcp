@@ -61,3 +61,7 @@ scripts/
 
 # Server runtime logs (e.g. server.log.err, not covered by *.log)
 server.log*
+
+# Server runtime state
+_runtime/
+
