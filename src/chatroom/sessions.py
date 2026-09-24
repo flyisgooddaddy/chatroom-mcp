@@ -1,4 +1,4 @@
-﻿"""Agent registry: multi-host per agent name with explicit active binding.
+"""Agent registry: multi-host per agent name with explicit active binding.
 
 Storage shape (post-migration):
     agents: [
@@ -29,6 +29,7 @@ Kick semantics (post-ban):
     bridge sees a clear failure and stops polling. The server's 30s probe loop
     only iterates registered hosts, so a kicked/removed host is not probed.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,12 +46,12 @@ MAX_HOSTS_PER_AGENT = 32
 class HostSession:
     """One opencode session that registered as a host of an agent name."""
 
-    sid: str                # opencode session id (== bound_session_id on the wire)
-    session_name: str       # human label shown in UI
-    callback_url: str       # chatroom pushes @-mentions here
+    sid: str  # opencode session id (== bound_session_id on the wire)
+    session_name: str  # human label shown in UI
+    callback_url: str  # chatroom pushes @-mentions here
     last_seen: float
     status: str = "online"
-    machine: str = ""       # machine label (e.g. "openwriter-bobo-T300LA"); empty for legacy hosts
+    machine: str = ""  # machine label (e.g. "openwriter-bobo-T300LA"); empty for legacy hosts
 
     def effective_status(self, timeout: float = SESSION_TIMEOUT) -> str:
         if self.status == "offline":
@@ -81,9 +82,7 @@ class Agent:
         return {
             "name": self.name,
             "active_sid": self.active_sid,
-            "hosts": [
-                {**asdict(h), "status": h.effective_status()} for h in self.hosts
-            ],
+            "hosts": [{**asdict(h), "status": h.effective_status()} for h in self.hosts],
         }
 
 
@@ -271,7 +270,9 @@ class AgentRegistry:
         if len(agent.hosts) == before:
             return False
         if agent.active_sid == sid:
-            agent.active_sid = max(agent.hosts, key=lambda h: h.last_seen).sid if agent.hosts else None
+            agent.active_sid = (
+                max(agent.hosts, key=lambda h: h.last_seen).sid if agent.hosts else None
+            )
         if not agent.hosts:
             del self._agents[name]
         self._save()
@@ -396,4 +397,3 @@ class AgentRegistry:
                 if host.callback_url:
                     out.append((agent.name, host))
         return out
-

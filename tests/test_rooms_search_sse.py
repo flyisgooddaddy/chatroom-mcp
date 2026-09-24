@@ -1,4 +1,5 @@
 """Tests for multi-room, search, SSE hub, and long-poll."""
+
 import asyncio
 
 import pytest
@@ -16,8 +17,12 @@ def mp_client(tmp_path):
 
 
 def _msg(tag: str, **kw) -> dict:
-    base = {"from": tag, "type": "finding", "timestamp": "2026-09-14T15:00:00+08:00",
-            "subject": f"{tag} hello world"}
+    base = {
+        "from": tag,
+        "type": "finding",
+        "timestamp": "2026-09-14T15:00:00+08:00",
+        "subject": f"{tag} hello world",
+    }
     base.update(kw)
     return base
 
@@ -87,6 +92,7 @@ async def test_hub_sse_subscribe_broadcast():
     raw = await asyncio.wait_for(q.get(), timeout=1)
     assert "chat" not in raw  # sanity: it's the raw json payload
     import json
+
     assert json.loads(raw)["kind"] == "message"
     await hub.sse_unsubscribe(q)
     assert hub.client_count == 0

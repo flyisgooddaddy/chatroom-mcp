@@ -12,6 +12,7 @@ The TS plugin had three pieces worth lifting:
      is_targeting(), and dispatches to a framework-specific injector.
      Implemented as AgentClient.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,6 +38,7 @@ CLIENT_INFO = {"name": "chatroom-client", "version": "0.1.0"}
 
 
 # ----- exactly-once claims ----------------------------------------------------
+
 
 class ChatroomClaim:
     """Atomic exclusive-create dedup, port of claimOnce() in bridge.ts.
@@ -89,6 +91,7 @@ class ChatroomClaim:
 
 
 # ----- active-session marker & injection-echo guard --------------------------
+
 
 class AgentState:
     """Active-session marker + last-injection record.
@@ -152,6 +155,7 @@ class AgentState:
 
 
 # ----- transport: MCP JSON-RPC over StreamableHTTP ----------------------------
+
 
 class McpError(RuntimeError):
     """Raised when the MCP server returns a JSON-RPC error or non-2xx."""
@@ -273,6 +277,7 @@ def _unwrap(body: str) -> Any:
 
 
 # ----- targeting filter -------------------------------------------------------
+
 
 def is_targeting(msg: dict[str, Any], names: list[str]) -> bool:
     """Return True iff `msg` is targeting any of the agent's names.

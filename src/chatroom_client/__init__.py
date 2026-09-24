@@ -17,6 +17,7 @@ Usage:
     await client.start()         # handshake + start heartbeat + poll
     await client.run_forever()   # block until SIGINT
 """
+
 from __future__ import annotations
 
 __version__ = "0.1.0"

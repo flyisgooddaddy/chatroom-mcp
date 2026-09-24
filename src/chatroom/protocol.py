@@ -3,7 +3,9 @@
 We do NOT redefine the canonical schema (see `.workbuddy/comms/protocol.json`);
 we only validate that a message satisfies the minimum v2.1 contract.
 """
+
 from __future__ import annotations
+
 from typing import Any
 
 REQUIRED_FIELDS = ("id", "from", "type", "timestamp", "subject")

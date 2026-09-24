@@ -15,6 +15,7 @@ Schema (all keys optional except agent.name and server.url):
     session_marker_filename: chatroom-client.active
     lastinject_filename: chatroom-client.lastinject
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -47,7 +48,9 @@ class AgentConfig:
     agent: AgentSection
     server: ServerConfig
     driver: str = "none"
-    state_dir: Path = field(default_factory=lambda: Path.home() / ".local" / "share" / "chatroom-client")
+    state_dir: Path = field(
+        default_factory=lambda: Path.home() / ".local" / "share" / "chatroom-client"
+    )
     heartbeat_seconds: float = 30.0
     poll_timeout_seconds: float = 25.0
     session_marker_filename: str = "chatroom-client.active"
@@ -108,7 +111,9 @@ class AgentConfig:
             raise FileNotFoundError(f"chatroom.yaml not found: {p}")
         data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
         if not isinstance(data, dict):
-            raise ValueError(f"chatroom.yaml: top-level must be a mapping, got {type(data).__name__}")
+            raise ValueError(
+                f"chatroom.yaml: top-level must be a mapping, got {type(data).__name__}"
+            )
         return cls.from_dict(data)
 
     @classmethod

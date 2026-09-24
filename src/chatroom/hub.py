@@ -1,4 +1,4 @@
-﻿"""WebSocket connection hub.
+"""WebSocket connection hub.
 
 Tracks all connected WebSocket clients (browser GUIs) and broadcasts events to them.
 Events:
@@ -7,6 +7,7 @@ Events:
 - {kind: "session_removed", name: "..."}
 - {kind: "snapshot", messages: [...], sessions: [...]}
 """
+
 from __future__ import annotations
 
 import asyncio

@@ -1,10 +1,11 @@
-﻿"""Textual app: three-pane chatroom + input box.
+"""Textual app: three-pane chatroom + input box.
 
 Layout (top to bottom):
   - Header: connection status + active identity (workbuddy | opencode | human)
   - Three vertical panes (workbuddy | opencode | human)
   - Input box (Tab cycles target identity)
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -75,8 +76,13 @@ class ChatroomApp(App):
     color_scheme: reactive[str] = reactive("dark")
     filter_query: reactive[str] = reactive("")
 
-    def __init__(self, comms_dir: Path, server_url: str | None = None,
-                 poll_interval: float = 2.0, room: str = "main") -> None:
+    def __init__(
+        self,
+        comms_dir: Path,
+        server_url: str | None = None,
+        poll_interval: float = 2.0,
+        room: str = "main",
+    ) -> None:
         super().__init__()
         self.comms_dir = Path(comms_dir)
         self.store = Store(self.comms_dir, room)
@@ -124,8 +130,9 @@ class ChatroomApp(App):
         q = self.filter_query.strip().lower()
         if not q:
             return True
-        hay = " ".join(str(msg.get(k, "")) for k in
-                       ("id", "from", "to", "type", "subject", "body")).lower()
+        hay = " ".join(
+            str(msg.get(k, "")) for k in ("id", "from", "to", "type", "subject", "body")
+        ).lower()
         return q in hay
 
     def _clear_panes(self) -> None:
@@ -143,10 +150,13 @@ class ChatroomApp(App):
 
     def _route(self, msg: dict[str, Any]) -> None:
         sender = str(msg.get("from", ""))
-        pane_id = {"workbuddy": "pane-workbuddy",
-                   "opencode": "pane-opencode"}.get(sender, "pane-human")
+        pane_id = {"workbuddy": "pane-workbuddy", "opencode": "pane-opencode"}.get(
+            sender, "pane-human"
+        )
         try:
-            self.query_one(f"#{pane_id}", MessageLog).append_message(msg, self.color_scheme == "dark")
+            self.query_one(f"#{pane_id}", MessageLog).append_message(
+                msg, self.color_scheme == "dark"
+            )
         except Exception:
             pass
 
@@ -188,7 +198,8 @@ class ChatroomApp(App):
         self.filter_query = (event.value or "").strip()
         self._reroute_all()
         self.query_one("#status-bar", Static).update(
-            f"[bold]search[/bold]: {self.filter_query or '(none)'}")
+            f"[bold]search[/bold]: {self.filter_query or '(none)'}"
+        )
         self.refresh_status()
 
     def on_chat_input_submitted(self, event) -> None:
@@ -231,4 +242,3 @@ class ChatroomApp(App):
             self._route(stored)
         except Exception as e:
             self.refresh_status(f"error: {e}")
-

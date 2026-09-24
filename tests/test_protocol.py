@@ -1,4 +1,5 @@
-﻿"""Smoke tests for the protocol validator (P1)."""
+"""Smoke tests for the protocol validator (P1)."""
+
 from chatroom.protocol import is_well_formed
 
 

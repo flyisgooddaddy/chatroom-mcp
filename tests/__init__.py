@@ -1,1 +1,1 @@
-﻿"""Test suite for chatroom-mcp."""
+"""Test suite for chatroom-mcp."""
