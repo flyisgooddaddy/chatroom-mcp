@@ -13,6 +13,9 @@ Serves:
   GET  /api/stream           Server-Sent Events (real-time push)
   GET  /api/sessions         List registered agent sessions
   POST /api/post             Post a message from the GUI
+  POST /api/files            Upload an attachment        (B, atomic write, size cap)
+  GET  /api/files/{id}       Download an attachment      (B)
+  DELETE /api/files/{id}     Delete an attachment        (B)
   DELETE /api/sessions/{name}    Kick + ban an agent (persistent)
   DELETE /api/agents/{name}/hosts/{sid}  Kick + ban a single host (persistent)
   GET  /api/bans                 List all (name, sid) entries in the ban list
@@ -23,13 +26,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.fastmcp import FastMCP
@@ -276,6 +281,11 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
 
     stores: dict[str, Store] = {r: Store(comms_dir, r) for r in room_names}
     sessions = AgentRegistry(comms_dir)
+    # Attachment files live under a per-comm-dir "files/" dir. Deterministic ids
+    # are guessable, so file ids embed a random token (f-<8 hex>). Files are
+    # never committed to git (comm-dir is runtime state).
+    files_dir = comms_dir / "files"
+    files_dir.mkdir(parents=True, exist_ok=True)
     mcp = _build_mcp(stores, sessions=sessions)
     # Build the MCP ASGI app up front so mcp.session_manager is initialized.
     # NOTE: Starlette's Mount does NOT run the child app's lifespan, so the
@@ -317,6 +327,7 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
     app.state.stores = stores
     app.state.rooms = room_names
     app.state.mcp = mcp
+    app.state.files_dir = files_dir
 
     @app.get("/", include_in_schema=False)
     async def index():
@@ -449,6 +460,65 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
             raise HTTPException(400, str(e)) from e
         await _notify_and_broadcast(stored, sessions)
         return stored
+
+    # ---- Attachment file transfer (B) ----
+    # Server-side handler bound to `files_dir` via closure (like stores).
+    @app.post("/api/files")
+    async def api_file_upload(file: UploadFile = File(...)) -> dict[str, Any]:
+        """Upload an attachment. Writes atomically (tmp+rename); returns a
+        reference for a message's `attachments` field."""
+        max_bytes = int(os.environ.get("CHATROOM_MAX_FILE_BYTES", "20971520"))  # 20 MB default
+        file_id = "f-" + secrets.token_hex(4)  # 8 random hex, unguessable
+        filename = Path(file.filename or "upload").name  # strip any path
+        # Stream to a temp file so we never buffer the whole upload in memory.
+        tmp = files_dir / (file_id + ".tmp")
+        try:
+            written = 0
+            with tmp.open("wb") as out:
+                while True:
+                    chunk = await file.read(1 << 20)  # 1 MiB
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise HTTPException(413, f"file exceeds {max_bytes} byte cap")
+                    out.write(chunk)
+            tmp.replace(files_dir / file_id)  # atomic commit
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        return {
+            "file_id": file_id,
+            "name": filename,
+            "size": written,
+            "content_type": file.content_type or "application/octet-stream",
+            "url": f"/api/files/{file_id}",
+        }
+
+    def _safe_file_path(file_id: str) -> Path:
+        if not file_id:
+            raise HTTPException(400, "missing file_id")
+        p = (files_dir / file_id).resolve()
+        if p.parent != files_dir.resolve():
+            raise HTTPException(400, "invalid file_id")
+        return p
+
+    @app.get("/api/files/{file_id}")
+    async def api_file_get(file_id: str):
+        """Download an attachment by its (unguessable) file_id."""
+        p = _safe_file_path(file_id)
+        if not p.is_file():
+            raise HTTPException(404, "file not found")
+        return FileResponse(p)
+
+    @app.delete("/api/files/{file_id}")
+    async def api_file_delete(file_id: str) -> dict[str, Any]:
+        """Delete an attachment. Ownership is implied by knowing the id."""
+        p = _safe_file_path(file_id)
+        if not p.is_file():
+            raise HTTPException(404, "file not found")
+        p.unlink()
+        return {"deleted": file_id}
 
     @app.delete("/api/sessions/{name}")
     async def api_kick(name: str) -> dict[str, Any]:
