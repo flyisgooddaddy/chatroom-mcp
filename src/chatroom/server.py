@@ -478,12 +478,9 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
             msg["attachments"] = cleaned or None
         # Merge body @-mentions into `msg.to` (single source of truth). PUSH
         # agents are only notified when they appear in `to`; body @ mentions
-        # were silently dropped for them. Resolve each @mention to a known
-        # target, union with the existing `to` (GUI/original first, de-dup,
-        # keep case). Non-agent @ tokens are left untouched.
+        # were silently dropped for them. Union with existing `to` (original
+        # first, de-dup, keep case; unknown agent in body = skip).
         body = str(msg.get("body") or "")
-        # findall grabs up to next whitespace (含内部标点如 example.com);
-        # rstrip 只去尾部空格/标点(中间 . 保留, 邮箱会 resolve 失败被 skip, 不污染 to).
         mentions = [m.rstrip(" \t\u3000\u3002\uff0c,.!?\uff1b;:：") for m in re.findall(r"@([^\s@]+)", body)]
         if mentions:
             orig = msg.get("to")
@@ -492,12 +489,19 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
             )
             ordered: list[str] = []
             seen: set[str] = set()
-            for t in targets + mentions:
-                if not t or t in seen:
-                    continue
-                if _resolve_push_target(t, sessions) is not None:
+            for t in targets:
+                if t and t not in seen:
                     seen.add(t)
                     ordered.append(t)
+            for m in mentions:
+                # keep if it's a known agent (PULL agents have no callback, so
+                # must not use _resolve_push_target which only returns push-capable).
+                known = sessions.get_agent(m) is not None or any(
+                    h.session_name == m for a in sessions.all_agents() for h in a.hosts
+                )
+                if known and m not in seen:
+                    seen.add(m)
+                    ordered.append(m)
             if ordered:
                 msg["to"] = ordered[0] if len(ordered) == 1 else ordered
         try:
