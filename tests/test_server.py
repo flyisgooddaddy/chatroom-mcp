@@ -459,3 +459,43 @@ def test_static_dir(client):
             assert r.text == "hi"
     finally:
         target.unlink()
+
+
+def test_api_post_merges_body_mentions_into_to(client):
+    """方案1: server 落库时把 body @-mention(能解析的)并入 msg.to.
+
+    PUSH agents only get notified when they appear in `to`; body @ was dropped
+    for them. Fix merges resolvable body mentions into to, de-dup, keep case,
+    and ignores non-agent @ tokens / emails.
+    """
+    c, tmp = client
+    sessions = c.app.state.sessions
+    sessions.handshake("fakeagent", "ses_fake_1", callback_url="http://127.0.0.1:9/x", machine="m")
+
+    def post(body, to):
+        payload = {"msg": {"from": "human", "type": "finding", "timestamp": "2026-09-25T12:00:00+08:00",
+                          "subject": "t", "body": body, "to": to}}
+        r = c.post("/api/post", json=payload)
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    # 1) body @fakeagent + existing to -> to 有 fakeagent; @nobody(非agent)过滤; 保留大小写
+    stored = post("@fakeagent, 你好 @nobody", "human")
+    to = stored.get("to")
+    toset = set(to if isinstance(to, list) else [to])
+    assert "fakeagent" in toset
+    assert "nobody" not in toset
+
+    # 2) email 不被误当 mention(example.com resolve 失败, skip)
+    stored = post("user@example.com 测试 @fakeagent", None)
+    to = stored.get("to")
+    toset = set(to if isinstance(to, list) else [to])
+    assert "fakeagent" in toset
+    assert not any("example" in t for t in toset)
+
+    # 3) 短 session_name 也并入(resolve ok)
+    sessions.handshake("ses_short", "ses_short_1", callback_url="http://127.0.0.1:9/y", machine="m")
+    stored = post("@ses_short @fakeagent", "")
+    to = stored.get("to")
+    toset = set(to if isinstance(to, list) else [to])
+    assert {"ses_short", "fakeagent"} <= toset
