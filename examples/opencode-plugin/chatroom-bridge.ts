@@ -3,10 +3,16 @@ import { appendFile, mkdir, open, readdir, readFile, rm, writeFile } from "node:
 import { join } from "node:path"
 import { homedir, hostname } from "node:os"
 
-const CHATROOM_HTTP = process.env.CHATROOM_HTTP ?? "http://192.168.31.127:7777"
+const CHATROOM_HTTP = process.env.CHATROOM_HTTP ?? "http://192.168.31.201:7777"
 const MCP_URL = `${CHATROOM_HTTP}/mcp/`
 const AGENT_NAME = "opencode"
 const AGENT_ALIASES = ["opencode", "opencode-desktop", "main-agent", "opencode-bobo-001"]
+// Inbound-abort/protocol (chatroom-interrupt): when enabled, an incoming @-mention
+// aborts the currently-running assistant turn before injecting, so the model
+// becomes aware of the new message even mid-task. Off by default (compat).
+const ABORT_IF_RUNNING = process.env.CHATROOM_ABORT_IF_RUNNING === "1"
+// Unified inbound prefix (shared with openwriter) so a busy model notices push.
+const INBOUND_PREFIX = "[NEW INBOUND @" + AGENT_NAME + " prior to current]: "
 // Machine label for the world-snapshot block. Placeholder until the server's
 // (a1) handshake machine field lands; override via CHATROOM_MACHINE.
 const MY_MACHINE = process.env.CHATROOM_MACHINE ?? (() => { try { return hostname() } catch { return "unknown" } })()
@@ -278,8 +284,19 @@ function fmtTo(to: any): string {
 }
 
 async function injectIntoSession(client: any, sessionId: string, msg: any): Promise<void> {
+  // chatroom-interrupt: if enabled, abort any in-flight assistant turn so the
+  // model becomes aware of the new inbound message instead of finishing an old
+  // long task first.
+  if (ABORT_IF_RUNNING) {
+    try {
+      await withTimeout((client as any).session.abort({ path: { id: sessionId } }), SRV_TIMEOUT_MS, "session.abort")
+    } catch (e: any) {
+      await flog(`abort skipped sid=${sessionId}: ${e?.message ?? e}`)
+    }
+  }
   const world = await fetchWorld()
   const prompt =
+    INBOUND_PREFIX + "\n" +
     world + "\n\n" +
     `[chatroom @${AGENT_NAME}] id=${msg.id} from=${msg.from ?? "?"}` +
     (msg.to !== undefined ? ` to=${fmtTo(msg.to)}` : "") +
