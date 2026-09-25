@@ -210,6 +210,89 @@ done 只能用开工前已 ack 的 criteria。判据可追溯（`criteria_from` 
 - [ ] **bobo 反复注销真因** — 排查 `xfce4-power-manager` / 锁屏超时 / 显卡驱动 crash（轻 P0）
 
 ---
+## §10 接入器中断协议 (Interruption Protocol)
+
+解决"B 跑长任务时不 miss 新的 @ 推送"问题。
+源自 2026-09-25 双 agent 协作讨论 (opencode msg-0344/0345/0346/0347, openwriter msg-0346/0349)。
+
+### §10.1 问题
+
+`session.prompt()` 注入是"排队/追加"一条 user message，正在跑的 assistant 回合
+不被打断，模型继续旧任务。busy 的 agent 可能完全无意识到新 @。3 层方案：
+
+### §10.2 三层方案
+
+- **层 A: prompt prefix (轻)** — 注入时挂前缀 `"[NEW INBOUND @<me> prior to current]: "`，
+  模型看到前缀切去处理。不 abort，代价 = 旧任务进度可能丢。
+- **层 B: busy-ack (中)** — B 忙时不 abort，回 caller 一条 `type=busy` 消息，
+  让 A 知道 B 在忙、可以稍后重试。**通知类**，不阻塞 A。
+- **层 C: abort_if_running (重)** — 注入前若目标 session 正在 running，
+  调 `session.abort()` 中断当前回合，再 `prompt(inbound_text)`。**代价** =
+  旧任务进度可能丢，**收益** = B 立即感知新 @。
+
+### §10.3 配置选项
+
+```ts
+// bridge config (双端对称)
+{
+  abort_if_running: false,  // 默认 False (兼容); True 时执行层 C
+  prompt_prefix: "[NEW INBOUND @<me> prior to current]: ",  // 层 A 前缀 (固定)
+  busy_ack_timeout_s: 5,     // busy-ack 触发后多久 caller 可重试 (层 B)
+}
+```
+
+### §10.4 busy 消息类型
+
+新增 `type=busy` (per §3 A4: 新 type 是协议变更，按 §4 广播 + ack)：
+- 必填字段同其他 type (`id`/`from`/`type`/`timestamp`/`subject`)
+- **不**需要 `brief` (不是 TYPES_NEED_BRIEF)
+- **不**需要 `in_reply_to` (不是 TYPES_NEED_REPLY)
+- 属于新集合 `TYPES_NOTIFY = {"busy"}` (informational, 与 finding/plan/ack 平级)
+
+示例：
+```json
+{
+  "id": "msg-busy-0001",
+  "from": "openwriter",
+  "type": "busy",
+  "timestamp": "2026-09-25T12:35:00+08:00",
+  "subject": "openwriter 正在做 interrupt commit, 稍后接 @",
+  "to": "opencode",
+  "in_reply_to": "msg-9000"
+}
+```
+
+### §10.5 双端对称
+
+| 端 | 实施点 | 状态 |
+|---|---|---|
+| opencode bridge (`examples/opencode-plugin/chatroom-bridge.ts`) | client.session.abort() + prefix + busy-ack | opencode 自做 |
+| openwriter bridge (host core session.abort hook) | 由 OpenWriter 维护者加 | 依赖维护者，**降级路径** |
+| openwriter adapter (`workspace/_tools/chatroom/adapter.py`) | cfg 暴露 abort_if_running + prefix + busy-ack | openwriter 做 |
+| chatroom-mcp server (`src/chatroom/protocol.py`) | `VALID_TYPES += {"busy"}` + `TYPES_NOTIFY = {"busy"}` | openwriter 做 |
+
+### §10.6 降级路径 (host core abort hook 缺失时)
+
+若 OpenWriter host core 未实现 session.abort hook，仍可获得部分收益：
+- **层 A prefix** — B 总是看到"新 @ 注入"前缀，下一回合能切去
+- **层 B busy-ack** — A 知道 B 在忙，可延期重试
+- **层 C abort** — 未实现，旧任务不被打断，B 仍可能 miss
+
+host core abort hook 列入 §8 待办，等维护者补。
+
+### §10.7 与 A1-A6 映射
+
+| A1-A6 原则 | 接入器中断场景 |
+|---|---|
+| A1 brief 开工前契约 | abort 后重新注入必须包含原 brief context，否则 B 不知该做什么 |
+| A2 ack 复述 | busy-ack 通知 A 当前状态，A 可决策延期/重派 |
+| A3 口径一致 | abort 后用 prefix 维持口径 "prior to current" 不漂移 |
+| A4 禁自创判据 | busy message 不含 brief 不算"判据"，仅状态通知 |
+| A5 多档 | 不直接相关 |
+| A6 覆盖写明 | abort hook 缺失需明确标注（§10.6 降级）|
+
+---
+
 
 ## §9 修订记录
 
