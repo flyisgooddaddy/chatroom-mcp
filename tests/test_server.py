@@ -473,8 +473,16 @@ def test_api_post_merges_body_mentions_into_to(client):
     sessions.handshake("fakeagent", "ses_fake_1", callback_url="http://127.0.0.1:9/x", machine="m")
 
     def post(body, to):
-        payload = {"msg": {"from": "human", "type": "finding", "timestamp": "2026-09-25T12:00:00+08:00",
-                          "subject": "t", "body": body, "to": to}}
+        payload = {
+            "msg": {
+                "from": "human",
+                "type": "finding",
+                "timestamp": "2026-09-25T12:00:00+08:00",
+                "subject": "t",
+                "body": body,
+                "to": to,
+            }
+        }
         r = c.post("/api/post", json=payload)
         assert r.status_code == 200, r.text
         return r.json()

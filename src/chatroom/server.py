@@ -481,7 +481,9 @@ def create_app(comms_dir: Path, rooms: list[str] | None = None) -> FastAPI:
         # were silently dropped for them. Union with existing `to` (original
         # first, de-dup, keep case; unknown agent in body = skip).
         body = str(msg.get("body") or "")
-        mentions = [m.rstrip(" \t\u3000\u3002\uff0c,.!?\uff1b;:：") for m in re.findall(r"@([^\s@]+)", body)]
+        mentions = [
+            m.rstrip(" \t\u3000\u3002\uff0c,.!?\uff1b;:：") for m in re.findall(r"@([^\s@]+)", body)
+        ]
         if mentions:
             orig = msg.get("to")
             targets = (
